@@ -708,7 +708,7 @@ class _ControlScreenState extends State<ControlScreen> {
                         scale: 0.75,
                         child: Switch(
                           value: isWhiteTrack,
-                          activeThumbColor: Colors.white,
+                          activeColor: Colors.white,
                           activeTrackColor: Colors.grey[400],
                           inactiveThumbColor: Colors.grey[300],
                           inactiveTrackColor: Colors.black54,
