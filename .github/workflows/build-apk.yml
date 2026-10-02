@@ -31,6 +31,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.32.8"
           channel: stable
           cache: true
 
@@ -40,6 +41,7 @@ jobs:
           org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G
           android.useAndroidX=true
           android.enableJetifier=true
+          android.suppressUnsupportedCompileSdk=36
           EOF
 
       - name: Dependencias
