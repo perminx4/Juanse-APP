@@ -62,14 +62,14 @@ class BluetoothService with ChangeNotifier {
   // --- Contrato Telemetría Carga Fija ---
   int _est = 0; // 0 = Espera, 1 = Corriendo, 2 = Calibrando
   int _posInt = 0; // 0 a 7000
-  String _bat = "7.40"; // Voltaje Batería
-  List<int> _sensors = List.filled(10, 0); // 10 sensores IR (0 a 1023)
+  String _bat = "--"; // Sin medidor de batería en el robot
+  List<int> _sensors = List.filled(12, 0); // 12 sensores IR (0 a 1023)
 
   int get estadoVal => _est;
   int get posVal => _posInt;
   String get bat => _bat;
   double get batVal => double.tryParse(_bat) ?? 0.0;
-  bool get isLowBattery => isConnected && batVal > 0.0 && batVal < 10.8;
+  bool get isLowBattery => false; // el robot no mide batería
   List<int> get sensors => List.unmodifiable(_sensors);
 
   bool _hasFreshConfigPayload = false;
@@ -325,10 +325,10 @@ class BluetoothService with ChangeNotifier {
   }
 
   void _resetTelemetryData() {
-    _sensors = List.filled(10, 0);
+    _sensors = List.filled(12, 0);
     _est = 0;
     _posInt = 0;
-    _bat = "0.00";
+    _bat = "--";
   }
 
   void _startRssiMonitoring(BluetoothDevice device) {
@@ -403,11 +403,11 @@ class BluetoothService with ChangeNotifier {
       if (jsonData.containsKey('S') && jsonData['S'] is List) {
         final rawList = jsonData['S'] as List;
         List<int> parsedSensors = rawList.map((e) => (e as num).toInt().clamp(0, 1023)).toList();
-        while (parsedSensors.length < 10) {
+        while (parsedSensors.length < 12) {
           parsedSensors.add(0);
         }
-        if (parsedSensors.length > 10) {
-          parsedSensors = parsedSensors.sublist(0, 10);
+        if (parsedSensors.length > 12) {
+          parsedSensors = parsedSensors.sublist(0, 12);
         }
         _sensors = parsedSensors;
       }
