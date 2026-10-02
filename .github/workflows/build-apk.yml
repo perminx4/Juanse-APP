@@ -40,7 +40,7 @@ jobs:
           cat > "$PROJECT_DIR/android/gradle.properties" <<'EOF'
           org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G
           android.useAndroidX=true
-          android.enableJetifier=true
+          android.enableJetifier=false
           android.suppressUnsupportedCompileSdk=36
           EOF
 
