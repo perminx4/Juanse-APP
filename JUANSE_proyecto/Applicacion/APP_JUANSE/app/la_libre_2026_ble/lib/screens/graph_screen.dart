@@ -68,12 +68,23 @@ class _GraphScreenState extends State<GraphScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Posición (0-9000)", style: Theme.of(context).textTheme.headlineSmall),
-              const Text("🎯 Centro Ideal: 4500", style: TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+              Text("Error de posición", style: Theme.of(context).textTheme.headlineSmall),
+              const Text("🎯 Centro ideal: 0", style: TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
             ],
           ),
           const SizedBox(height: 16),
           _buildPosChart(service.posData),
+          const SizedBox(height: 32),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text("Error suavizado", style: Theme.of(context).textTheme.headlineSmall),
+              Text("Umbral de curva: ${service.umb}", style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildEaChart(service.eaData, service.umb.toDouble()),
         ],
       ),
     );
@@ -89,13 +100,19 @@ class _GraphScreenState extends State<GraphScreen> {
     );
   }
 
+  // El robot manda el error con signo (0 = línea centrada): el eje es simétrico y se ajusta solo
   Widget _buildPosChart(List<FlSpot> data) {
+    double maxAbs = 100;
+    for (final p in data) {
+      if (p.y.abs() > maxAbs) maxAbs = p.y.abs();
+    }
+    final double limite = (maxAbs * 1.2).ceilToDouble();
     return AspectRatio(
       aspectRatio: 1.7,
       child: LineChart(
         LineChartData(
-          minY: 0,
-          maxY: 9000,
+          minY: -limite,
+          maxY: limite,
           lineTouchData: _lineTouchData(),
           lineBarsData: [
             _lineBarData(data, Colors.redAccent),
@@ -103,7 +120,7 @@ class _GraphScreenState extends State<GraphScreen> {
           extraLinesData: ExtraLinesData(
             horizontalLines: [
               HorizontalLine(
-                y: 4500,
+                y: 0,
                 color: Colors.greenAccent,
                 strokeWidth: 2,
                 dashArray: [6, 4],
@@ -112,7 +129,49 @@ class _GraphScreenState extends State<GraphScreen> {
                   alignment: Alignment.topRight,
                   padding: const EdgeInsets.only(right: 8, bottom: 4),
                   style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                  labelResolver: (line) => "Centro (4500)",
+                  labelResolver: (line) => "Centro (0)",
+                ),
+              ),
+            ],
+          ),
+          titlesData: _titlesData(),
+          gridData: _gridData(),
+          borderData: FlBorderData(show: true, border: Border.all(color: Colors.white24)),
+        ),
+      ),
+    );
+  }
+
+  // Error suavizado que usa el robot para decidir recta/curva, con la línea del umbral
+  Widget _buildEaChart(List<FlSpot> data, double umbral) {
+    double maxVal = umbral * 2;
+    for (final p in data) {
+      if (p.y * 1.2 > maxVal) maxVal = p.y * 1.2;
+    }
+    if (maxVal < 10) maxVal = 10;
+    return AspectRatio(
+      aspectRatio: 1.7,
+      child: LineChart(
+        LineChartData(
+          minY: 0,
+          maxY: maxVal.ceilToDouble(),
+          lineTouchData: _lineTouchData(),
+          lineBarsData: [
+            _lineBarData(data, Colors.lightBlueAccent),
+          ],
+          extraLinesData: ExtraLinesData(
+            horizontalLines: [
+              HorizontalLine(
+                y: umbral,
+                color: Colors.orangeAccent,
+                strokeWidth: 2,
+                dashArray: [6, 4],
+                label: HorizontalLineLabel(
+                  show: true,
+                  alignment: Alignment.topRight,
+                  padding: const EdgeInsets.only(right: 8, bottom: 4),
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                  labelResolver: (line) => "Umbral",
                 ),
               ),
             ],

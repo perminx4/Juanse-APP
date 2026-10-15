@@ -618,6 +618,20 @@ class _ControlScreenState extends State<ControlScreen> {
             const Divider(height: 12),
             const SizedBox(height: 6),
 
+            // --- MODO DE LARGADA: Normal (un solo PID) o Mapeo (usa el mapa de la pista) ---
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment<bool>(value: false, label: Text('Normal'), icon: Icon(Icons.speed)),
+                  ButtonSegment<bool>(value: true, label: Text('Mapeo'), icon: Icon(Icons.map)),
+                ],
+                selected: {service.usarMapa},
+                onSelectionChanged: (service.isConnected && !isCorriendo) ? (sel) => service.setUsarMapa(sel.first) : null,
+              ),
+            ),
+            const SizedBox(height: 10),
+
             // --- FILA 1: START (VERDE) Y STOP (ROJO) ---
             Row(
               children: [
@@ -838,7 +852,7 @@ class _ControlScreenState extends State<ControlScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Telemetría Crítica', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: themeColor)),
+                Text('Telemetría', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: themeColor)),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
@@ -858,14 +872,9 @@ class _ControlScreenState extends State<ControlScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _criticalDataItem("Pitch", "${service.pitchActual}°", Icons.screen_rotation, themeColor),
-                _criticalDataItem("Posición", service.pos, Icons.center_focus_strong, themeColor),
-                _criticalDataItem(
-                  "Batería",
-                  "${service.bat} V",
-                  service.isLowBattery ? Icons.battery_alert : Icons.battery_charging_full,
-                  service.isLowBattery ? Colors.redAccent : themeColor,
-                ),
+                _criticalDataItem("Error", service.pos, Icons.center_focus_strong, themeColor),
+                _criticalDataItem("Rueda izq.", service.l, Icons.rotate_left, themeColor),
+                _criticalDataItem("Rueda der.", service.r, Icons.rotate_right, themeColor),
               ],
             ),
           ],
@@ -912,7 +921,7 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 
   Widget _buildDataDisplay(BluetoothService service) {
-    final Color themeColor = service.isLowBattery ? Colors.redAccent : Colors.blueAccent;
+    final Color themeColor = Colors.blueAccent;
 
     return Card(
       child: Padding(
@@ -920,7 +929,7 @@ class _ControlScreenState extends State<ControlScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Datos Recibidos', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: themeColor)),
+            Text('Datos del robot (modo Normal)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: themeColor)),
             const Divider(height: 12),
             const SizedBox(height: 6),
             Row(
@@ -928,40 +937,15 @@ class _ControlScreenState extends State<ControlScreen> {
                 _dataDisplayItem("KP", service.kp),
                 _dataDisplayItem("KI", service.ki),
                 _dataDisplayItem("KD", service.kd),
+                _dataDisplayItem("Vel", service.ve),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                _dataDisplayItem("Pos", service.pos),
-                _dataDisplayItem("Vb", service.vb),
-                Expanded(child: Container()),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _dataDisplayItem("VM", service.ve),
-                _dataDisplayItem("MC", service.mc),
-                _dataDisplayItem("AB", service.ab),
-                _dataDisplayItem("FB", service.fb),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _dataDisplayItem("KF", service.kf),
-                _dataDisplayItem("Pitch", service.pitchActual),
-                _dataDisplayItem("Roll", service.rollActual),
                 _dataDisplayItem("Pista", service.lineaBlanca == "1" ? "Blanca (B)" : "Negra (N)"),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _dataDisplayItem("P_sup", service.pSup),
-                _dataDisplayItem("P_inf", service.pInf),
-                Expanded(child: Container()),
+                _dataDisplayItem("Largada", service.usarMapa ? "Mapeo" : "Normal"),
+                _dataDisplayItem("Tramos", service.segmentos.length.toString()),
               ],
             ),
           ],

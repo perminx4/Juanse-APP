@@ -6,7 +6,6 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' hide BluetoothService;
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String LAST_DEVICE_ID_KEY = "last_device_id";
@@ -17,6 +16,13 @@ const String rxCharacteristicUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 enum BLEStatus { disconnected, scanning, connecting, connected }
+
+/// Un tramo del mapa de la pista: tipo 0 = recta, 1 = curva, y su duración en ms.
+class MapSeg {
+  int tipo;
+  int ms;
+  MapSeg(this.tipo, this.ms);
+}
 
 class BluetoothService with ChangeNotifier {
   BluetoothDevice? _connectedDevice;
@@ -46,6 +52,7 @@ class BluetoothService with ChangeNotifier {
   final List<FlSpot> pitchData = [];
   final List<FlSpot> rollData = [];
   final List<FlSpot> posData = [];
+  final List<FlSpot> eaData = [];
   final List<FlSpot> lData = [];
   final List<FlSpot> rData = [];
   final List<String> consoleLog = [];
@@ -71,6 +78,35 @@ class BluetoothService with ChangeNotifier {
   double get batVal => double.tryParse(_bat) ?? 0.0;
   bool get isLowBattery => false; // el robot no mide batería
   List<int> get sensors => List.unmodifiable(_sensors);
+
+  // --- Mapa de pista y perfil de curva (firmware con mapeo) ---
+  int _md = 0; // modo de corrida: 0 normal, 1 mapeando, 2 carrera con mapa
+  int _tr = 0; // tramo detectado por los sensores: 0 recta, 1 curva
+  int _ea = 0; // error absoluto suavizado (para elegir el umbral de curva)
+  int _sg = -1; // tramo actual del mapa en carrera (-1 = ninguno)
+  int get modoCorrida => _md;
+  int get tramoDetectado => _tr;
+  int get errorAbsSuave => _ea;
+  int get segmentoActual => _sg;
+
+  // Perfiles de PID del modo con mapa y parámetros del mapa
+  // (los manda el robot en "refresh" y tras cada cambio)
+  double rkp = 3.0, rki = 0.0, rkd = 35.0; // PID de recta
+  int rvm = 255;
+  double ckp = 3.0, cki = 0.0, ckd = 35.0; // PID de curva
+  int cvm = 150;
+  int adel = 150;
+  double esc = 1.0; // factor de velocidad: multiplica el tiempo de las rectas
+  double ecu = 1.0; // multiplica el tiempo de las curvas
+  int umb = 80;
+  int tcf = 60;
+  bool usarMapa = false;
+  int pasadas = 0;
+  final List<MapSeg> segmentos = [];
+
+  // Avisos del robot (guardado, pasada incorporada/descartada)
+  String ultimoAviso = "";
+  int avisoId = 0;
 
   bool _hasFreshConfigPayload = false;
   bool get hasFreshConfigPayload => _hasFreshConfigPayload;
@@ -269,6 +305,10 @@ class BluetoothService with ChangeNotifier {
       Future.delayed(const Duration(milliseconds: 300), () {
         sendCommand("refresh");
       });
+      // El mapa se pide aparte (llega en bloques chicos)
+      Future.delayed(const Duration(milliseconds: 900), () {
+        sendCommand("mapget");
+      });
 
     } catch (e) {
       _status = BLEStatus.disconnected;
@@ -329,6 +369,10 @@ class BluetoothService with ChangeNotifier {
     _est = 0;
     _posInt = 0;
     _bat = "--";
+    _md = 0;
+    _tr = 0;
+    _ea = 0;
+    _sg = -1;
   }
 
   void _startRssiMonitoring(BluetoothDevice device) {
@@ -368,10 +412,35 @@ class BluetoothService with ChangeNotifier {
     }
   }
 
+  int _rxCount = 0;
+
   void _processJsonPayload(String jsonStr) {
-    _addLog("RX: $jsonStr");
+    // La telemetría normal llega a 20 Hz: se registra 1 de cada 20 para no saturar la consola.
+    // Los demás paquetes (config, mapa, avisos) se registran siempre.
+    _rxCount++;
+    final bool esTelemetriaNormal = jsonStr.contains('"Tr":');
+    if (!esTelemetriaNormal || _rxCount % 20 == 0) {
+      _addLog("RX: $jsonStr");
+    }
     try {
       final jsonData = jsonDecode(jsonStr) as Map<String, dynamic>;
+
+      // --- Paquetes especiales (no son telemetría: no tocan los gráficos) ---
+      if (jsonData.containsKey('MapI')) {
+        _handleMapChunk(jsonData);
+        notifyListeners();
+        return;
+      }
+      if (jsonData.containsKey('RKP') || jsonData.containsKey('ADEL')) {
+        _handleExtraConfig(jsonData);
+        notifyListeners();
+        return;
+      }
+      if (jsonData.containsKey('Ack')) {
+        _handleAck(jsonData);
+        notifyListeners();
+        return;
+      }
 
       // --- 1. CARGA FIJA (OBLIGATORIA EN CADA PAQUETE a 20Hz) ---
       if (jsonData.containsKey('Pitch') && jsonData['Pitch'] != null) {
@@ -385,6 +454,11 @@ class BluetoothService with ChangeNotifier {
       } else if (jsonData.containsKey('estado') && jsonData['estado'] != null) {
         _est = (jsonData['estado'] as num).toInt();
       }
+
+      if (jsonData['Md'] is num) _md = (jsonData['Md'] as num).toInt();
+      if (jsonData['Tr'] is num) _tr = (jsonData['Tr'] as num).toInt();
+      if (jsonData['Ea'] is num) _ea = (jsonData['Ea'] as num).toInt();
+      if (jsonData['Sg'] is num) _sg = (jsonData['Sg'] as num).toInt();
 
       if (jsonData.containsKey('Pos') && jsonData['Pos'] != null) {
         _posInt = (jsonData['Pos'] as num).toInt();
@@ -498,6 +572,125 @@ class BluetoothService with ChangeNotifier {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // MAPA DE PISTA
+  // ---------------------------------------------------------------------------
+  void _handleExtraConfig(Map<String, dynamic> j) {
+    double d(String k, double cur) => (j[k] is num) ? (j[k] as num).toDouble() : cur;
+    int i(String k, int cur) => (j[k] is num) ? (j[k] as num).toInt() : cur;
+
+    rkp = d('RKP', rkp);
+    rki = d('RKI', rki);
+    rkd = d('RKD', rkd);
+    rvm = i('RVM', rvm);
+    ckp = d('CKP', ckp);
+    cki = d('CKI', cki);
+    ckd = d('CKD', ckd);
+    cvm = i('CVM', cvm);
+    adel = i('ADEL', adel);
+    esc = d('ESC', esc);
+    ecu = d('ECU', ecu);
+    umb = i('UMB', umb);
+    tcf = i('TCF', tcf);
+    usarMapa = i('MAPA', usarMapa ? 1 : 0) != 0;
+    pasadas = i('PAS', pasadas);
+
+    final n = i('NSEG', segmentos.length);
+    if (n < segmentos.length) {
+      segmentos.removeRange(n, segmentos.length);
+    }
+    while (segmentos.length < n) {
+      segmentos.add(MapSeg(0, 0));
+    }
+  }
+
+  void _handleMapChunk(Map<String, dynamic> j) {
+    final start = (j['MapI'] is num) ? (j['MapI'] as num).toInt() : 0;
+    final n = (j['MapN'] is num) ? (j['MapN'] as num).toInt() : 0;
+    if (n < segmentos.length) {
+      segmentos.removeRange(n, segmentos.length);
+    }
+    while (segmentos.length < n) {
+      segmentos.add(MapSeg(0, 0));
+    }
+    final lista = j['Map'];
+    if (lista is List) {
+      for (int k = 0; k < lista.length; k++) {
+        final item = lista[k];
+        final idx = start + k;
+        if (item is List && item.length >= 2 && idx < segmentos.length) {
+          segmentos[idx] = MapSeg((item[0] as num).toInt(), (item[1] as num).toInt());
+        }
+      }
+    }
+  }
+
+  void _handleAck(Map<String, dynamic> j) {
+    final a = j['Ack'].toString();
+    if (a == 'save') {
+      _avisar("Guardado en el robot");
+    } else if (a == 'pasada') {
+      final ok = (j['Ok'] is num) && (j['Ok'] as num).toInt() == 1;
+      if (j['PAS'] is num) pasadas = (j['PAS'] as num).toInt();
+      final nPasada = (j['N'] is num) ? (j['N'] as num).toInt() : 0;
+      final nMapa = (j['NSEG'] is num) ? (j['NSEG'] as num).toInt() : 0;
+      if (ok) {
+        _avisar("Pasada incorporada al mapa ($nPasada tramos, $pasadas pasadas promediadas)");
+      } else {
+        _avisar("Pasada descartada: tuvo $nPasada tramos y el mapa tiene $nMapa. "
+            "Revisá el umbral de curva o borrá el mapa y empezá de nuevo.");
+      }
+    }
+  }
+
+  void _avisar(String mensaje) {
+    ultimoAviso = mensaje;
+    avisoId++;
+    _addLog("ROBOT: $mensaje");
+  }
+
+  /// Elige el modo de largada: false = normal (un solo PID), true = con mapa.
+  Future<void> setUsarMapa(bool valor) async {
+    usarMapa = valor;
+    notifyListeners();
+    await sendCommand("mapa:${valor ? 1 : 0}");
+  }
+
+  /// Cambia un tramo del mapa (en la app y en el robot).
+  Future<void> editarSegmento(int i, int tipo, int ms) async {
+    if (i < 0 || i >= 32) return;
+    final msOk = ms.clamp(0, 65535).toInt();
+    while (segmentos.length <= i) {
+      segmentos.add(MapSeg(0, 0));
+    }
+    segmentos[i] = MapSeg(tipo == 1 ? 1 : 0, msOk);
+    notifyListeners();
+    await sendCommand("seg:$i,${segmentos[i].tipo},$msOk");
+  }
+
+  /// Agrega un tramo al final (alterna recta/curva, 1000 ms para editar después).
+  Future<void> agregarSegmento() async {
+    final i = segmentos.length;
+    if (i >= 32) return;
+    await editarSegmento(i, i % 2 == 0 ? 0 : 1, 1000);
+  }
+
+  /// Borra el tramo i y corre los siguientes.
+  Future<void> eliminarSegmento(int i) async {
+    if (i < 0 || i >= segmentos.length) return;
+    final copia = List<MapSeg>.from(segmentos);
+    copia.removeAt(i);
+    for (int j = i; j < copia.length; j++) {
+      await sendCommand("seg:$j,${copia[j].tipo},${copia[j].ms}");
+      await Future.delayed(const Duration(milliseconds: 60));
+    }
+    await sendCommand("segn:${copia.length}");
+    segmentos
+      ..clear()
+      ..addAll(copia);
+    notifyListeners();
+  }
+
   Future<void> sendCommand(String command) async {
     _addLog("TX: $command");
 
@@ -548,12 +741,14 @@ class BluetoothService with ChangeNotifier {
     pitchData.add(FlSpot(_dataCounter.toDouble(), newPitch));
     rollData.add(FlSpot(_dataCounter.toDouble(), newRoll));
     posData.add(FlSpot(_dataCounter.toDouble(), newPos));
+    eaData.add(FlSpot(_dataCounter.toDouble(), _ea.toDouble()));
     lData.add(FlSpot(_dataCounter.toDouble(), newL));
     rData.add(FlSpot(_dataCounter.toDouble(), newR));
 
     if (pitchData.length > maxDataPoints) pitchData.removeAt(0);
     if (rollData.length > maxDataPoints) rollData.removeAt(0);
     if (posData.length > maxDataPoints) posData.removeAt(0);
+    if (eaData.length > maxDataPoints) eaData.removeAt(0);
     if (lData.length > maxDataPoints) lData.removeAt(0);
     if (rData.length > maxDataPoints) rData.removeAt(0);
   }
@@ -562,6 +757,7 @@ class BluetoothService with ChangeNotifier {
     pitchData.clear();
     rollData.clear();
     posData.clear();
+    eaData.clear();
     lData.clear();
     rData.clear();
     _dataCounter = 0;
@@ -590,44 +786,42 @@ class BluetoothService with ChangeNotifier {
       return null;
     }
 
-    var status = await Permission.storage.status;
-    if (!status.isGranted) {
-      status = await Permission.storage.request();
-    }
-
-    if (status.isGranted || await Permission.manageExternalStorage.isGranted) {
-      try {
-        final headers = _recordedData.first.keys.toList();
-        final List<List<dynamic>> rows = [headers];
-        for (var row in _recordedData) {
-          rows.add(headers.map((header) => row[header]).toList());
+    try {
+      // Claves de todos los paquetes (los de config traen más campos que los de telemetría)
+      final List<String> headers = [];
+      for (final row in _recordedData) {
+        for (final k in row.keys) {
+          if (!headers.contains(k)) headers.add(k);
         }
-
-        String csvData = const ListToCsvConverter().convert(rows);
-
-        final directory = await getExternalStorageDirectory();
-        final path = directory?.path;
-        final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
-        final file = File('$path/sesion_control_$timestamp.csv');
-
-        await file.writeAsString(csvData);
-        _addLog("Archivo guardado en: ${file.path}");
-        _recordedData.clear();
-        return file.path;
-      } catch (e) {
-        _addLog("Error al guardar el archivo: $e");
-        return null;
       }
-    } else {
-      _addLog("Permiso de almacenamiento denegado.");
+      final List<List<dynamic>> rows = [headers];
+      for (final row in _recordedData) {
+        rows.add(headers.map((header) => row[header]).toList());
+      }
+
+      final String csvData = const ListToCsvConverter().convert(rows);
+
+      final directory = await _carpetaSesiones();
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+      final file = File('${directory.path}/sesion_control_$timestamp.csv');
+
+      await file.writeAsString(csvData);
+      _addLog("Archivo guardado en: ${file.path}");
+      _recordedData.clear();
+      return file.path;
+    } catch (e) {
+      _addLog("Error al guardar el archivo: $e");
       return null;
     }
   }
 
-  Future<List<File>> getSavedSessions() async {
-    final directory = await getExternalStorageDirectory();
-    if (directory == null) return [];
+  /// Carpeta propia de la app: no pide permisos y funciona en Android (incluido el 13+) y en iPhone.
+  Future<Directory> _carpetaSesiones() async {
+    return await getApplicationDocumentsDirectory();
+  }
 
+  Future<List<File>> getSavedSessions() async {
+    final directory = await _carpetaSesiones();
     final files = directory.listSync();
     return files.whereType<File>().where((file) => file.path.endsWith('.csv')).toList();
   }
