@@ -1,0 +1,60 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Buscar el proyecto Flutter
+        run: |
+          echo "Contenido del repositorio:"
+          find . -maxdepth 4 -not -path "./.git/*" | head -50
+          PUBSPEC=$(find . -name pubspec.yaml -not -path "*/.*" -not -path "*/build/*" | head -1)
+          if [ -z "$PUBSPEC" ]; then
+            echo "ERROR: no se encontró pubspec.yaml. Los archivos del proyecto no se subieron."
+            exit 1
+          fi
+          DIR=$(dirname "$PUBSPEC")
+          echo "Proyecto encontrado en: $DIR"
+          echo "PROJECT_DIR=$DIR" >> $GITHUB_ENV
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.32.8"
+          channel: stable
+          cache: true
+
+      - name: Limpiar gradle.properties
+        run: |
+          cat > "$PROJECT_DIR/android/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G
+          android.useAndroidX=true
+          android.enableJetifier=false
+          android.suppressUnsupportedCompileSdk=36
+          EOF
+
+      - name: Dependencias
+        run: cd "$PROJECT_DIR" && flutter pub get
+
+      - name: Generar iconos de la app
+        run: cd "$PROJECT_DIR" && dart run flutter_launcher_icons
+
+      - name: Compilar APK release
+        run: cd "$PROJECT_DIR" && flutter build apk --release
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JUANSE_apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
