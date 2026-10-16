@@ -96,8 +96,13 @@ class BluetoothService with ChangeNotifier {
   double ckp = 3.0, cki = 0.0, ckd = 35.0; // PID de curva
   int cvm = 150;
   int adel = 150;
-  double esc = 1.0; // factor de velocidad: multiplica el tiempo de las rectas
-  double ecu = 1.0; // multiplica el tiempo de las curvas
+  double esc = 1.0; // factor de velocidad de las rectas (x2 = la recta dura la mitad)
+  double ecu = 1.0; // factor de velocidad de las curvas
+  double racel = 1.0; // rampa de aceleración (PWM por ms)
+  double rfren = 2.0; // rampa de frenado (PWM por ms)
+  int tmin = 300; // al grabar, los tramos más cortos que esto (ms) se fusionan
+  bool sens = true; // frenar si los sensores ven curva aunque el mapa diga recta
+  bool repetir = true; // al terminar el último tramo vuelve al primero (varias vueltas)
   int umb = 80;
   int tcf = 60;
   bool usarMapa = false;
@@ -590,6 +595,11 @@ class BluetoothService with ChangeNotifier {
     adel = i('ADEL', adel);
     esc = d('ESC', esc);
     ecu = d('ECU', ecu);
+    racel = d('RAC', racel);
+    rfren = d('RFR', rfren);
+    tmin = i('TMIN', tmin);
+    sens = i('SENS', sens ? 1 : 0) != 0;
+    repetir = i('REP', repetir ? 1 : 0) != 0;
     umb = i('UMB', umb);
     tcf = i('TCF', tcf);
     usarMapa = i('MAPA', usarMapa ? 1 : 0) != 0;
@@ -633,12 +643,20 @@ class BluetoothService with ChangeNotifier {
       final ok = (j['Ok'] is num) && (j['Ok'] as num).toInt() == 1;
       if (j['PAS'] is num) pasadas = (j['PAS'] as num).toInt();
       final nPasada = (j['N'] is num) ? (j['N'] as num).toInt() : 0;
+      final nCrudo = (j['R'] is num) ? (j['R'] as num).toInt() : nPasada;
       final nMapa = (j['NSEG'] is num) ? (j['NSEG'] as num).toInt() : 0;
+      final codigo = (j['Cd'] is num) ? (j['Cd'] as num).toInt() : (ok ? 2 : 3);
+      final tPasada = (j['TP'] is num) ? (j['TP'] as num).toInt() / 1000.0 : 0.0;
+      final tMapa = (j['TM'] is num) ? (j['TM'] as num).toInt() / 1000.0 : 0.0;
+      final detalle = nCrudo != nPasada ? "$nCrudo detectados, $nPasada tras limpiar" : "$nPasada tramos";
       if (ok) {
-        _avisar("Pasada incorporada al mapa ($nPasada tramos, $pasadas pasadas promediadas)");
+        _avisar("Pasada incorporada al mapa ($detalle, $pasadas pasadas promediadas)");
+      } else if (codigo == 4) {
+        _avisar("Pasada descartada: duró ${tPasada.toStringAsFixed(1)} s y el mapa dura ${tMapa.toStringAsFixed(1)} s. "
+            "¿Diste más de una vuelta? Cada pasada tiene que ser UNA vuelta, parando en el punto de largada.");
       } else {
-        _avisar("Pasada descartada: tuvo $nPasada tramos y el mapa tiene $nMapa. "
-            "Revisá el umbral de curva o borrá el mapa y empezá de nuevo.");
+        _avisar("Pasada descartada: sus tramos no coinciden con el mapa ($nPasada vs $nMapa). "
+            "Subí 'Tramo mínimo' o 'Confirmación', o borrá el mapa y grabá de nuevo.");
       }
     }
   }
@@ -654,6 +672,20 @@ class BluetoothService with ChangeNotifier {
     usarMapa = valor;
     notifyListeners();
     await sendCommand("mapa:${valor ? 1 : 0}");
+  }
+
+  /// Repetir el mapa: al terminar el último tramo vuelve al primero (carreras de varias vueltas).
+  Future<void> setRepetir(bool valor) async {
+    repetir = valor;
+    notifyListeners();
+    await sendCommand("rep:${valor ? 1 : 0}");
+  }
+
+  /// Activa o desactiva el frenado por sensores (red de seguridad).
+  Future<void> setSens(bool valor) async {
+    sens = valor;
+    notifyListeners();
+    await sendCommand("sens:${valor ? 1 : 0}");
   }
 
   /// Cambia un tramo del mapa (en la app y en el robot).
