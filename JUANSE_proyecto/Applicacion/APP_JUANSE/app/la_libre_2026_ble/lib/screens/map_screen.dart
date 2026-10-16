@@ -40,9 +40,16 @@ const List<_ParamDef> _perfilCurva = [
 const List<_ParamDef> _paramsMapa = [
   _ParamDef('adel', 'Adelanto de frenado', 'ms', 10.0, 0, 2000, 0),
   _ParamDef('esc', 'Factor de velocidad (rectas)', 'x', 0.05, 0.05, 5, 2),
-  _ParamDef('ecu', 'Factor de tiempo (curvas)', 'x', 0.05, 0.05, 5, 2),
+  _ParamDef('ecu', 'Factor de velocidad (curvas)', 'x', 0.05, 0.05, 5, 2),
+  _ParamDef('racel', 'Rampa de aceleración', '', 0.1, 0.05, 10, 2),
+  _ParamDef('rfren', 'Rampa de frenado', '', 0.1, 0.05, 10, 2),
+];
+
+// Ajustes de la detección de tramos al grabar y de la red de seguridad
+const List<_ParamDef> _paramsDeteccion = [
   _ParamDef('umb', 'Umbral de curva', '', 5.0, 5, 2000, 0),
   _ParamDef('tcf', 'Confirmación de tramo', 'ms', 10.0, 10, 500, 0),
+  _ParamDef('tmin', 'Tramo mínimo al grabar', 'ms', 50.0, 0, 3000, 0),
 ];
 
 const List<String> _nombresPerfil = ['Normal', 'Recta', 'Curva'];
@@ -120,6 +127,12 @@ class _MapScreenState extends State<MapScreen> {
         return s.esc;
       case 'ecu':
         return s.ecu;
+      case 'racel':
+        return s.racel;
+      case 'rfren':
+        return s.rfren;
+      case 'tmin':
+        return s.tmin.toDouble();
       case 'umb':
         return s.umb.toDouble();
       case 'tcf':
@@ -220,6 +233,7 @@ class _MapScreenState extends State<MapScreen> {
               _cardGrabar(s, conectado, corriendo),
               _cardTramos(s, conectado, corriendo),
               _cardParametrosMapa(s, conectado),
+              _cardDeteccion(s, conectado),
               _cardGuardar(s, conectado),
               _cardAyuda(),
               const SizedBox(height: 24),
@@ -428,9 +442,11 @@ class _MapScreenState extends State<MapScreen> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'Poné el robot en la largada, calibrá, tocá "Grabar pasada" y dejalo recorrer la pista '
-              'con el PID y la velocidad de CURVA. Al terminar tocá "Terminar pasada". '
-              'Repetí 3 o más veces para promediar.',
+              '1 pasada = 1 vuelta. Poné el robot SIEMPRE en el mismo punto de largada, calibrá, tocá '
+              '"Grabar pasada", dejalo dar UNA vuelta y tocá "Terminar pasada" (o frená con el botón) '
+              'cuando vuelva a ese punto. No lo dejes dar varias vueltas seguidas: el robot no sabe dónde '
+              'empieza la pista y las anotaría como una sola pasada larguísima. '
+              'Repetí las veces que quieras: cada pasada se promedia con las anteriores.',
               style: TextStyle(fontSize: 12, color: Colors.white70),
             ),
             const SizedBox(height: 10),
@@ -652,17 +668,61 @@ class _MapScreenState extends State<MapScreen> {
           children: [
             _titulo('Ajustes del mapa', Icons.settings_suggest),
             for (final p in _paramsMapa) _filaParametro(s, p, conectado),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Repetir el mapa (varias vueltas)', style: TextStyle(fontSize: 14)),
+              subtitle: const Text(
+                'Al terminar el último tramo vuelve al primero, para carreras de más de una vuelta.',
+                style: TextStyle(fontSize: 11, color: Colors.white54),
+              ),
+              value: s.repetir,
+              onChanged: conectado ? (v) => s.setRepetir(v) : null,
+            ),
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
                 'Adelanto: cuántos ms antes del fin de la recta empieza a frenar. '
-                'Factor de velocidad: ajusta el tiempo de las rectas (grabaste lento y corrés rápido: '
-                'por ejemplo 0.5 = la recta dura la mitad). '
-                'Factor de curvas: lo mismo para las curvas. '
-                'Umbral: si el error suavizado lo supera, el robot lo toma como curva. '
-                'Confirmación: cuánto debe sostenerse un cambio para tomarlo como un tramo nuevo.',
+                'Factor de velocidad: cuántas veces más rápido corrés que cuando grabaste. '
+                'Con 2, una recta grabada en 1800 ms dura 900 ms; con 1 dura lo mismo que lo grabado; '
+                'con 0.8 dura 1/0.8 veces más. Ojo: se aplica sobre los tiempos de la tabla, '
+                'no los edites además por la velocidad. '
+                'Rampa de aceleración y de frenado: cuántos PWM por ms cambia la velocidad entre recta y curva '
+                '(1.0 = de 130 a 255 en unos 125 ms). Más bajo = más suave pero tarda más en recuperar velocidad.',
                 style: TextStyle(fontSize: 11, color: Colors.white54),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Detección de tramos y red de seguridad --------------------------------
+  Widget _cardDeteccion(BluetoothService s, bool conectado) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _titulo('Detección de tramos', Icons.radar),
+            for (final p in _paramsDeteccion) _filaParametro(s, p, conectado),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Frenar si los sensores ven curva', style: TextStyle(fontSize: 14)),
+              subtitle: const Text(
+                'Red de seguridad: aunque el mapa diga recta, si el error supera el umbral usa el perfil de curva.',
+                style: TextStyle(fontSize: 11, color: Colors.white54),
+              ),
+              value: s.sens,
+              onChanged: conectado ? (v) => s.setSens(v) : null,
+            ),
+            const Text(
+              'Umbral: si el error suavizado lo supera, el robot lo toma como curva. '
+              'Confirmación: cuánto debe sostenerse un cambio para tomarlo como un tramo nuevo '
+              '(subila si el robot marca rectas falsas en medio de una curva). '
+              'Tramo mínimo: al terminar una pasada, los tramos más cortos que esto se fusionan con el vecino.',
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
         ),
@@ -751,14 +811,16 @@ class _MapScreenState extends State<MapScreen> {
             '1. Modo NORMAL: tuneá Kp, Ki, Kd y velocidad en "PID y velocidad > Normal". '
             'Es un solo PID para toda la pista y no usa el mapa.\n\n'
             '2. Elegí la velocidad y el PID de CURVA (pestaña "Curva").\n\n'
-            '3. Con el robot en la largada y calibrado, tocá "Grabar pasada". Recorre la pista con el '
-            'PID de curva y anota los tramos. Tocá "Terminar pasada" al terminar.\n\n'
-            '4. Repetí 3 o más pasadas. Si una pasada sale con distinta cantidad de tramos, se descarta.\n\n'
+            '3. Con el robot en el punto de largada y calibrado, tocá "Grabar pasada". Da UNA vuelta con el '
+            'PID de curva y anota los tramos. Cuando vuelva al punto de largada, tocá "Terminar pasada".\n\n'
+            '4. Volvé a ponerlo en el MISMO punto y repetí. Cada pasada se promedia con las anteriores: '
+            'cuantas más hagas, más preciso queda. Si una pasada dura muy distinto del mapa '
+            '(por ejemplo, diste dos vueltas) o sus tramos no coinciden, se descarta y te avisa.\n\n'
             '5. Revisá la barra y la tabla de tramos y corregí lo que veas mal.\n\n'
             '6. Cargá el PID y la velocidad de RECTA (pestaña "Recta"). Ajustá el factor de velocidad: '
             'como grabaste lento y corrés rápido, las rectas duran menos.\n\n'
             '7. Cambiá el modo a "Mapeo", largá, y ajustá el adelanto de frenado hasta que frene justo '
-            'antes de cada curva.\n\n'
+            'antes de cada curva. Si la carrera es de varias vueltas, dejá activado "Repetir el mapa".\n\n'
             '8. Tocá "Guardar todo" para que el robot recuerde todo al apagarse.\n\n'
             'Si algo sale mal en carrera, volvé al modo NORMAL: no usa el mapa.',
             style: TextStyle(fontSize: 13),
