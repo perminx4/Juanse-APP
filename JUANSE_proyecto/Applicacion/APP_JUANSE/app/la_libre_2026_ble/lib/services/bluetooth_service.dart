@@ -96,8 +96,8 @@ class BluetoothService with ChangeNotifier {
   double ckp = 3.0, cki = 0.0, ckd = 35.0; // PID de curva
   int cvm = 150;
   int adel = 150;
-  double esc = 1.0; // factor de velocidad de las rectas (x2 = la recta dura la mitad)
-  double ecu = 1.0; // factor de velocidad de las curvas
+  int acel = -100; // salida de curva: negativo = acelera antes, positivo = espera (ms)
+  bool carreraLista = false; // hay tiempos medidos en la última carrera listos para usar
   double racel = 1.0; // rampa de aceleración (PWM por ms)
   double rfren = 2.0; // rampa de frenado (PWM por ms)
   int tmin = 300; // al grabar, los tramos más cortos que esto (ms) se fusionan
@@ -593,8 +593,8 @@ class BluetoothService with ChangeNotifier {
     ckd = d('CKD', ckd);
     cvm = i('CVM', cvm);
     adel = i('ADEL', adel);
-    esc = d('ESC', esc);
-    ecu = d('ECU', ecu);
+    acel = i('ACEL', acel);
+    carreraLista = i('CAR', carreraLista ? 1 : 0) != 0;
     racel = d('RAC', racel);
     rfren = d('RFR', rfren);
     tmin = i('TMIN', tmin);
@@ -639,6 +639,21 @@ class BluetoothService with ChangeNotifier {
     final a = j['Ack'].toString();
     if (a == 'save') {
       _avisar("Guardado en el robot");
+    } else if (a == 'carrera') {
+      final ok = (j['Ok'] is num) && (j['Ok'] as num).toInt() == 1;
+      carreraLista = ok;
+      if (ok) {
+        _avisar("Carrera medida. Tocá \"Usar tiempos de la última carrera\" en la tabla de tramos "
+            "para que el mapa use esos tiempos.");
+      } else {
+        final nCrudo = (j['R'] is num) ? (j['R'] as num).toInt() : 0;
+        final nMapa = (j['NSEG'] is num) ? (j['NSEG'] as num).toInt() : 0;
+        _avisar("No pude medir esa carrera: detectó $nCrudo tramos y el mapa tiene $nMapa. "
+            "Para medir, dá una sola vuelta y parala al volver al punto de largada.");
+      }
+    } else if (a == 'adoptado') {
+      carreraLista = false;
+      _avisar("Tiempos del mapa actualizados con los de la última carrera");
     } else if (a == 'pasada') {
       final ok = (j['Ok'] is num) && (j['Ok'] as num).toInt() == 1;
       if (j['PAS'] is num) pasadas = (j['PAS'] as num).toInt();
@@ -681,6 +696,11 @@ class BluetoothService with ChangeNotifier {
     await sendCommand("rep:${valor ? 1 : 0}");
   }
 
+  /// Usa los tiempos medidos en la última carrera como tiempos del mapa.
+  Future<void> adoptarTiempos() async {
+    await sendCommand("adoptar");
+  }
+
   /// Activa o desactiva el frenado por sensores (red de seguridad).
   Future<void> setSens(bool valor) async {
     sens = valor;
@@ -696,6 +716,7 @@ class BluetoothService with ChangeNotifier {
       segmentos.add(MapSeg(0, 0));
     }
     segmentos[i] = MapSeg(tipo == 1 ? 1 : 0, msOk);
+    carreraLista = false;
     notifyListeners();
     await sendCommand("seg:$i,${segmentos[i].tipo},$msOk");
   }
