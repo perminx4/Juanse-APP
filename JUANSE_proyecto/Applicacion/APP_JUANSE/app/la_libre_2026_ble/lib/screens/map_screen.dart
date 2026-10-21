@@ -37,19 +37,19 @@ const List<_ParamDef> _perfilCurva = [
   _ParamDef('cvm', 'Velocidad curva', '', 5.0, 0, 255, 0),
 ];
 
+// Frenado y aceleración en las curvas (lo que se usa siempre)
 const List<_ParamDef> _paramsMapa = [
-  _ParamDef('adel', 'Adelanto de frenado', 'ms', 10.0, 0, 2000, 0),
-  _ParamDef('esc', 'Factor de velocidad (rectas)', 'x', 0.05, 0.05, 5, 2),
-  _ParamDef('ecu', 'Factor de velocidad (curvas)', 'x', 0.05, 0.05, 5, 2),
-  _ParamDef('racel', 'Rampa de aceleración', '', 0.1, 0.05, 10, 2),
-  _ParamDef('rfren', 'Rampa de frenado', '', 0.1, 0.05, 10, 2),
+  _ParamDef('adel', 'Frenar antes de la curva', 'ms', 10.0, 0, 2000, 0),
+  _ParamDef('acel', 'Acelerar al salir de la curva', 'ms', 10.0, -1000, 1000, 0),
 ];
 
-// Ajustes de la detección de tramos al grabar y de la red de seguridad
-const List<_ParamDef> _paramsDeteccion = [
+// Ajustes avanzados (se pueden dejar como están)
+const List<_ParamDef> _paramsAvanzados = [
   _ParamDef('umb', 'Umbral de curva', '', 5.0, 5, 2000, 0),
   _ParamDef('tcf', 'Confirmación de tramo', 'ms', 10.0, 10, 500, 0),
   _ParamDef('tmin', 'Tramo mínimo al grabar', 'ms', 50.0, 0, 3000, 0),
+  _ParamDef('racel', 'Subida de velocidad', '', 0.1, 0.05, 10, 2),
+  _ParamDef('rfren', 'Bajada de velocidad', '', 0.1, 0.05, 10, 2),
 ];
 
 const List<String> _nombresPerfil = ['Normal', 'Recta', 'Curva'];
@@ -123,10 +123,8 @@ class _MapScreenState extends State<MapScreen> {
         return s.cvm.toDouble();
       case 'adel':
         return s.adel.toDouble();
-      case 'esc':
-        return s.esc;
-      case 'ecu':
-        return s.ecu;
+      case 'acel':
+        return s.acel.toDouble();
       case 'racel':
         return s.racel;
       case 'rfren':
@@ -233,7 +231,7 @@ class _MapScreenState extends State<MapScreen> {
               _cardGrabar(s, conectado, corriendo),
               _cardTramos(s, conectado, corriendo),
               _cardParametrosMapa(s, conectado),
-              _cardDeteccion(s, conectado),
+              _cardAvanzado(s, conectado),
               _cardGuardar(s, conectado),
               _cardAyuda(),
               const SizedBox(height: 24),
@@ -565,13 +563,27 @@ class _MapScreenState extends State<MapScreen> {
               ),
             for (int i = 0; i < s.segmentos.length; i++) _filaTramo(s, i, editable),
             const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: (editable && s.segmentos.length < 32) ? () => s.agregarSegmento() : null,
-                icon: const Icon(Icons.add),
-                label: const Text('Agregar tramo'),
-              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: (editable && s.segmentos.length < 32) ? () => s.agregarSegmento() : null,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Agregar tramo'),
+                ),
+                FilledButton.icon(
+                  onPressed: (editable && s.carreraLista)
+                      ? () async {
+                          final ok = await _confirmar('Usar tiempos de la carrera',
+                              'Los tiempos de la tabla se reemplazan por los medidos en la última carrera. ¿Seguro?');
+                          if (ok) s.adoptarTiempos();
+                        }
+                      : null,
+                  icon: const Icon(Icons.timer),
+                  label: const Text('Usar tiempos de la última carrera'),
+                ),
+              ],
             ),
             if (corriendo)
               const Padding(
@@ -584,7 +596,9 @@ class _MapScreenState extends State<MapScreen> {
               child: Text(
                 'Tocá RECTA/CURVA para cambiar el tipo. Tocá el tiempo para escribirlo. '
                 'El último tramo dura lo que tardaste en parar el robot: corregilo si hace falta. '
-                'Los factores de abajo escalan todos los tiempos de rectas o de curvas juntos.',
+                'Como grabaste despacio, las rectas van a durar menos cuando corras rápido: '
+                'corré UNA vuelta en modo Mapeo y parala al volver al punto de largada; el robot mide cuánto '
+                'tardó en cada tramo y el botón "Usar tiempos de la última carrera" los copia a la tabla.',
                 style: TextStyle(fontSize: 11, color: Colors.white54),
               ),
             ),
@@ -658,7 +672,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // --- Parámetros del mapa ---------------------------------------------------
+  // --- Frenado y aceleración ---------------------------------------------------
   Widget _cardParametrosMapa(BluetoothService s, bool conectado) {
     return Card(
       child: Padding(
@@ -666,7 +680,7 @@ class _MapScreenState extends State<MapScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _titulo('Ajustes del mapa', Icons.settings_suggest),
+            _titulo('Frenado y aceleración (modo Mapeo)', Icons.speed),
             for (final p in _paramsMapa) _filaParametro(s, p, conectado),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -681,13 +695,11 @@ class _MapScreenState extends State<MapScreen> {
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'Adelanto: cuántos ms antes del fin de la recta empieza a frenar. '
-                'Factor de velocidad: cuántas veces más rápido corrés que cuando grabaste. '
-                'Con 2, una recta grabada en 1800 ms dura 900 ms; con 1 dura lo mismo que lo grabado; '
-                'con 0.8 dura 1/0.8 veces más. Ojo: se aplica sobre los tiempos de la tabla, '
-                'no los edites además por la velocidad. '
-                'Rampa de aceleración y de frenado: cuántos PWM por ms cambia la velocidad entre recta y curva '
-                '(1.0 = de 130 a 255 en unos 125 ms). Más bajo = más suave pero tarda más en recuperar velocidad.',
+                'Frenar antes de la curva: cuántos ms antes de que termine la recta (según el mapa) '
+                'empieza a frenar. Más alto = frena antes.\n'
+                'Acelerar al salir de la curva: con un valor NEGATIVO empieza a acelerar ese tiempo ANTES de '
+                'que termine la curva (según el mapa). Con un valor POSITIVO espera ese tiempo después de '
+                'empezar la recta antes de acelerar. 0 = justo cuando el mapa dice que empieza la recta.',
                 style: TextStyle(fontSize: 11, color: Colors.white54),
               ),
             ),
@@ -697,35 +709,40 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // --- Detección de tramos y red de seguridad --------------------------------
-  Widget _cardDeteccion(BluetoothService s, bool conectado) {
+  // --- Ajustes avanzados -------------------------------------------------------
+  Widget _cardAvanzado(BluetoothService s, bool conectado) {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _titulo('Detección de tramos', Icons.radar),
-            for (final p in _paramsDeteccion) _filaParametro(s, p, conectado),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Frenar si los sensores ven curva', style: TextStyle(fontSize: 14)),
-              subtitle: const Text(
-                'Red de seguridad: aunque el mapa diga recta, si el error supera el umbral usa el perfil de curva.',
-                style: TextStyle(fontSize: 11, color: Colors.white54),
-              ),
-              value: s.sens,
-              onChanged: conectado ? (v) => s.setSens(v) : null,
-            ),
-            const Text(
-              'Umbral: si el error suavizado lo supera, el robot lo toma como curva. '
-              'Confirmación: cuánto debe sostenerse un cambio para tomarlo como un tramo nuevo '
-              '(subila si el robot marca rectas falsas en medio de una curva). '
-              'Tramo mínimo: al terminar una pasada, los tramos más cortos que esto se fusionan con el vecino.',
+      child: ExpansionTile(
+        leading: const Icon(Icons.tune_outlined, color: Colors.lightBlueAccent),
+        title: const Text('Ajustes avanzados', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        subtitle: const Text('Se pueden dejar como están', style: TextStyle(fontSize: 12, color: Colors.white54)),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [
+          for (final p in _paramsAvanzados) _filaParametro(s, p, conectado),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Frenar si el error es grande', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              'Seguridad: aunque el mapa diga recta, si el robot se está yendo de la línea usa el PID de curva.',
               style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
-          ],
-        ),
+            value: s.sens,
+            onChanged: conectado ? (v) => s.setSens(v) : null,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Umbral de curva: cuánto error tiene que acumular el robot para considerar que está en una curva. '
+            'Si marca curvas en las rectas, subilo; si no detecta curvas, bajalo.\n'
+            'Confirmación de tramo: cuánto tiempo seguido tiene que durar un cambio de recta a curva para '
+            'creerlo (ignora ruidos).\n'
+            'Tramo mínimo al grabar: al grabar, los tramos más cortos que esto se fusionan con el vecino, '
+            'para que no queden rectas o curvas falsas.\n'
+            'Subida y bajada de velocidad: qué tan rápido cambia la velocidad al pasar de curva a recta y al '
+            'revés. Un número más alto hace el cambio más brusco; más bajo, más suave '
+            '(con 1.0 pasa de 130 a 255 en unos 0,13 s).',
+            style: TextStyle(fontSize: 11, color: Colors.white54),
+          ),
+        ],
       ),
     );
   }
@@ -817,11 +834,15 @@ class _MapScreenState extends State<MapScreen> {
             'cuantas más hagas, más preciso queda. Si una pasada dura muy distinto del mapa '
             '(por ejemplo, diste dos vueltas) o sus tramos no coinciden, se descarta y te avisa.\n\n'
             '5. Revisá la barra y la tabla de tramos y corregí lo que veas mal.\n\n'
-            '6. Cargá el PID y la velocidad de RECTA (pestaña "Recta"). Ajustá el factor de velocidad: '
-            'como grabaste lento y corrés rápido, las rectas duran menos.\n\n'
-            '7. Cambiá el modo a "Mapeo", largá, y ajustá el adelanto de frenado hasta que frene justo '
-            'antes de cada curva. Si la carrera es de varias vueltas, dejá activado "Repetir el mapa".\n\n'
-            '8. Tocá "Guardar todo" para que el robot recuerde todo al apagarse.\n\n'
+            '6. Cargá el PID y la velocidad de RECTA (pestaña "Recta").\n\n'
+            '7. Cambiá el modo a "Mapeo" y largá. Como grabaste despacio, los tiempos de las rectas van a '
+            'ser más largos que los reales. Corré UNA vuelta, parala al volver al punto de largada y tocá '
+            '"Usar tiempos de la última carrera": el robot mide cuánto tardó en cada tramo y los copia al mapa. '
+            'Repetilo un par de veces si querés afinar. También podés escribir los tiempos a mano.\n\n'
+            '8. Ajustá "Frenar antes de la curva" hasta que frene justo antes de cada curva, y "Acelerar al '
+            'salir de la curva" hasta que acelere cuando quieras. Si la carrera es de varias vueltas, dejá '
+            'activado "Repetir el mapa".\n\n'
+            '9. Tocá "Guardar todo" para que el robot recuerde todo al apagarse.\n\n'
             'Si algo sale mal en carrera, volvé al modo NORMAL: no usa el mapa.',
             style: TextStyle(fontSize: 13),
           ),
