@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' hide BluetoothService;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'pid_advisor.dart';
 
 const String LAST_DEVICE_ID_KEY = "last_device_id";
 const String nusServiceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
@@ -22,6 +23,14 @@ class MapSeg {
   int tipo;
   int ms;
   MapSeg(this.tipo, this.ms);
+}
+
+/// Un mapa guardado con nombre en la biblioteca del robot.
+class MapaGuardadoInfo {
+  final int lugar; // posición dentro de la biblioteca del robot (la usa para cargar/borrar)
+  final String nombre;
+  final int tramos;
+  MapaGuardadoInfo(this.lugar, this.nombre, this.tramos);
 }
 
 class BluetoothService with ChangeNotifier {
@@ -95,6 +104,8 @@ class BluetoothService with ChangeNotifier {
   int rvm = 255;
   double ckp = 3.0, cki = 0.0, ckd = 35.0; // PID de curva
   int cvm = 150;
+  int vmap = 150; // velocidad (PWM) con la que se graban las pasadas
+  double fcur = 1.0; // freno en curvas del modo Normal: en curva va a VM x fcur (1.0 = sin freno)
   int adel = 150;
   int acel = -100; // salida de curva: negativo = acelera antes, positivo = espera (ms)
   bool carreraLista = false; // hay tiempos medidos en la última carrera listos para usar
@@ -108,6 +119,21 @@ class BluetoothService with ChangeNotifier {
   bool usarMapa = false;
   int pasadas = 0;
   final List<MapSeg> segmentos = [];
+
+  // Biblioteca de mapas guardados en el robot (cada uno con su nombre)
+  static const int maxMapasGuardados = 12;
+  final List<MapaGuardadoInfo> biblioteca = [];
+  String _nombrePendiente = "";
+
+  // --- Asesor de PID: se graba cada corrida y al pararla se analiza (solo recomienda, no cambia nada) ---
+  final List<MuestraCorrida> _muestrasCorrida = [];
+  bool _registrando = false;
+  DateTime? _t0Corrida;
+  ParamsCorrida? _paramsCorrida;
+  InformeAsesor? ultimoInforme;
+  final List<InformeAsesor> historialInformes = []; // las últimas 5, la más nueva primero
+  bool get grabandoCorrida => _registrando;
+  int get muestrasCorridaActual => _muestrasCorrida.length;
 
   // Avisos del robot (guardado, pasada incorporada/descartada)
   String ultimoAviso = "";
@@ -314,6 +340,10 @@ class BluetoothService with ChangeNotifier {
       Future.delayed(const Duration(milliseconds: 900), () {
         sendCommand("mapget");
       });
+      // La lista de mapas guardados también llega aparte
+      Future.delayed(const Duration(milliseconds: 1300), () {
+        sendCommand("mlist");
+      });
 
     } catch (e) {
       _status = BLEStatus.disconnected;
@@ -370,6 +400,7 @@ class BluetoothService with ChangeNotifier {
   }
 
   void _resetTelemetryData() {
+    if (_registrando) _terminarCorrida();
     _sensors = List.filled(12, 0);
     _est = 0;
     _posInt = 0;
@@ -378,6 +409,7 @@ class BluetoothService with ChangeNotifier {
     _tr = 0;
     _ea = 0;
     _sg = -1;
+    biblioteca.clear();
   }
 
   void _startRssiMonitoring(BluetoothDevice device) {
@@ -431,6 +463,11 @@ class BluetoothService with ChangeNotifier {
       final jsonData = jsonDecode(jsonStr) as Map<String, dynamic>;
 
       // --- Paquetes especiales (no son telemetría: no tocan los gráficos) ---
+      if (jsonData.containsKey('LibI')) {
+        _handleLibChunk(jsonData);
+        notifyListeners();
+        return;
+      }
       if (jsonData.containsKey('MapI')) {
         _handleMapChunk(jsonData);
         notifyListeners();
@@ -567,6 +604,7 @@ class BluetoothService with ChangeNotifier {
         _recordedData.add(jsonData);
       }
 
+      _registrarCorrida(jsonData);
       _updateGraphData();
       if (!initialDataReceived) {
         initialDataReceived = true;
@@ -592,6 +630,8 @@ class BluetoothService with ChangeNotifier {
     cki = d('CKI', cki);
     ckd = d('CKD', ckd);
     cvm = i('CVM', cvm);
+    vmap = i('VMAP', vmap);
+    fcur = d('FCUR', fcur);
     adel = i('ADEL', adel);
     acel = i('ACEL', acel);
     carreraLista = i('CAR', carreraLista ? 1 : 0) != 0;
@@ -612,6 +652,84 @@ class BluetoothService with ChangeNotifier {
     while (segmentos.length < n) {
       segmentos.add(MapSeg(0, 0));
     }
+  }
+
+  /// Valores de los parámetros del robot en este momento (para el asesor)
+  ParamsCorrida _paramsActuales() {
+    return ParamsCorrida(
+      kp: double.tryParse(_kp) ?? 0,
+      ki: double.tryParse(_ki) ?? 0,
+      kd: double.tryParse(_kd) ?? 0,
+      vm: int.tryParse(_ve) ?? 0,
+      rkp: rkp,
+      rki: rki,
+      rkd: rkd,
+      rvm: rvm,
+      ckp: ckp,
+      cki: cki,
+      ckd: ckd,
+      cvm: cvm,
+      fcur: fcur,
+      umb: umb,
+    );
+  }
+
+  /// Se llama con cada paquete de telemetría: arma la lista de muestras mientras el robot corre
+  void _registrarCorrida(Map<String, dynamic> j) {
+    final corriendo = _est == 1;
+    if (corriendo && !_registrando) {
+      _registrando = true;
+      _muestrasCorrida.clear();
+      _t0Corrida = DateTime.now();
+      _paramsCorrida = _paramsActuales();
+    }
+    if (corriendo && j.containsKey('Tr') && _t0Corrida != null && _muestrasCorrida.length < 12000) {
+      _muestrasCorrida.add(MuestraCorrida(
+        DateTime.now().difference(_t0Corrida!).inMilliseconds,
+        _posInt,
+        int.tryParse(_l) ?? 0,
+        int.tryParse(_r) ?? 0,
+        _md,
+        _tr,
+      ));
+    }
+    if (!corriendo && _registrando) {
+      _terminarCorrida();
+    }
+  }
+
+  /// El robot paró: se analiza la corrida (si duró lo suficiente)
+  void _terminarCorrida() {
+    _registrando = false;
+    final params = _paramsCorrida;
+    if (params != null && _muestrasCorrida.length >= 40) {
+      final informe = analizarCorrida(List<MuestraCorrida>.of(_muestrasCorrida), params);
+      ultimoInforme = informe;
+      historialInformes.insert(0, informe);
+      if (historialInformes.length > 5) historialInformes.removeLast();
+    }
+    _muestrasCorrida.clear();
+  }
+
+  /// Lista de mapas guardados: llega de a 4, en orden: {"LibI":0,"LibN":3,"Lib":[[lugar,"nombre",tramos],...]}
+  void _handleLibChunk(Map<String, dynamic> j) {
+    final start = (j['LibI'] is num) ? (j['LibI'] as num).toInt() : 0;
+    final n = (j['LibN'] is num) ? (j['LibN'] as num).toInt() : 0;
+    if (start == 0) biblioteca.clear();
+    if (start != biblioteca.length) return; // paquete fuera de orden: se espera la próxima lista
+    final lista = j['Lib'];
+    if (lista is List) {
+      for (final item in lista) {
+        if (item is List && item.length >= 3) {
+          biblioteca.add(MapaGuardadoInfo(
+            (item[0] as num).toInt(),
+            item[1].toString(),
+            (item[2] as num).toInt(),
+          ));
+        }
+      }
+    }
+    if (biblioteca.length > n) biblioteca.removeRange(n, biblioteca.length);
   }
 
   void _handleMapChunk(Map<String, dynamic> j) {
@@ -651,6 +769,32 @@ class BluetoothService with ChangeNotifier {
         _avisar("No pude medir esa carrera: detectó $nCrudo tramos y el mapa tiene $nMapa. "
             "Para medir, dá una sola vuelta y parala al volver al punto de largada.");
       }
+    } else if (a == 'lib') {
+      final cd = (j['Cd'] is num) ? (j['Cd'] as num).toInt() : 0;
+      switch (cd) {
+        case 8:
+          _avisar("Mapa \"$_nombrePendiente\" guardado en la biblioteca");
+          break;
+        case 9:
+          _avisar("No hay un mapa para guardar. Grabá una pasada primero.");
+          break;
+        case 10:
+          _avisar("La biblioteca está llena (máximo $maxMapasGuardados mapas). Borrá alguno para guardar otro.");
+          break;
+        case 11:
+          carreraLista = false;
+          _avisar("Mapa \"$_nombrePendiente\" cargado. Es el mapa activo del robot.");
+          // El robot manda el mapa solo; se piden también los datos (pasadas, cantidad de tramos)
+          Future.delayed(const Duration(milliseconds: 400), () {
+            sendCommand("refresh");
+          });
+          break;
+        case 12:
+          _avisar("Mapa borrado de la biblioteca");
+          break;
+        default:
+          _avisar("No se pudo: el robot tiene que estar parado (ni corriendo ni calibrando) y el mapa tiene que existir.");
+      }
     } else if (a == 'adoptado') {
       carreraLista = false;
       _avisar("Tiempos del mapa actualizados con los de la última carrera");
@@ -680,6 +824,38 @@ class BluetoothService with ChangeNotifier {
     ultimoAviso = mensaje;
     avisoId++;
     _addLog("ROBOT: $mensaje");
+  }
+
+  /// Deja solo letras, números, espacio, guion, guion bajo y punto, y corta en 15 caracteres
+  /// (es lo que acepta el robot).
+  static String limpiarNombreMapa(String crudo) {
+    var n = crudo.replaceAll(RegExp(r'[^A-Za-z0-9 _.\-]'), '').trim();
+    if (n.length > 15) n = n.substring(0, 15).trim();
+    return n.isEmpty ? "Mapa" : n;
+  }
+
+  /// Guarda el mapa actual del robot en la biblioteca con ese nombre (si ya existe, lo reemplaza).
+  Future<void> guardarMapaEnBiblioteca(String nombre) async {
+    final n = limpiarNombreMapa(nombre);
+    _nombrePendiente = n;
+    await sendCommand("msave:$n");
+  }
+
+  /// Carga un mapa de la biblioteca como mapa actual del robot.
+  Future<void> cargarMapaDeBiblioteca(MapaGuardadoInfo m) async {
+    _nombrePendiente = m.nombre;
+    await sendCommand("mload:${m.lugar}");
+  }
+
+  /// Borra un mapa de la biblioteca.
+  Future<void> borrarMapaDeBiblioteca(MapaGuardadoInfo m) async {
+    _nombrePendiente = m.nombre;
+    await sendCommand("mdel:${m.lugar}");
+  }
+
+  /// Pide al robot la lista de mapas guardados.
+  Future<void> pedirBiblioteca() async {
+    await sendCommand("mlist");
   }
 
   /// Elige el modo de largada: false = normal (un solo PID), true = con mapa.
