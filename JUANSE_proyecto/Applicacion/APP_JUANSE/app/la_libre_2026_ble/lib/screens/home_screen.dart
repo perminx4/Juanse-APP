@@ -4,6 +4,7 @@ import 'graph_screen.dart';
 import 'console_screen.dart';
 import 'sessions_screen.dart'; // <-- Importa la nueva pantalla
 import 'map_screen.dart';
+import 'advisor_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
     GraphScreen(),
     ConsoleScreen(),
     MapScreen(),
+    AdvisorScreen(),
     SessionsScreen(), // <-- Nueva pestaña
   ];
 
@@ -54,6 +56,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.map),
             label: 'Mapa',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.insights),
+            label: 'Asesor',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.folder_copy),
