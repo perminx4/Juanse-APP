@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/bluetooth_service.dart';
 
@@ -21,6 +22,7 @@ const List<_ParamDef> _perfilNormal = [
   _ParamDef('ki', 'Ki', '', 0.01, 0, 1, 2),
   _ParamDef('kd', 'Kd', '', 1.0, 0, 100, 1),
   _ParamDef('vm', 'Velocidad', '', 5.0, 0, 255, 0),
+  _ParamDef('fcur', 'Freno en curvas (x VM)', '', 0.05, 0.2, 1.0, 2),
 ];
 
 const List<_ParamDef> _perfilRecta = [
@@ -36,6 +38,9 @@ const List<_ParamDef> _perfilCurva = [
   _ParamDef('ckd', 'Kd curva', '', 1.0, 0, 100, 1),
   _ParamDef('cvm', 'Velocidad curva', '', 5.0, 0, 255, 0),
 ];
+
+// Velocidad con la que se graban las pasadas (independiente de la velocidad de curva)
+const _ParamDef _paramVmap = _ParamDef('vmap', 'Velocidad al grabar', '', 5.0, 0, 255, 0);
 
 // Frenado y aceleración en las curvas (lo que se usa siempre)
 const List<_ParamDef> _paramsMapa = [
@@ -54,7 +59,8 @@ const List<_ParamDef> _paramsAvanzados = [
 
 const List<String> _nombresPerfil = ['Normal', 'Recta', 'Curva'];
 const List<String> _descripcionesPerfil = [
-  'Se usa en el modo NORMAL: un solo PID para toda la pista. Es el modo seguro.',
+  'Se usa en el modo NORMAL: un solo PID para toda la pista, sin mapa. '
+      'Con "Freno en curvas" por debajo de 1.00, en las curvas baja a Velocidad x ese factor.',
   'Se usa en las RECTAS del modo MAPEO.',
   'Se usa en las CURVAS del modo MAPEO y al grabar pasadas. '
       'Grabá las pasadas con la velocidad de curva con la que querés tomar las curvas.',
@@ -121,6 +127,10 @@ class _MapScreenState extends State<MapScreen> {
         return s.ckd;
       case 'cvm':
         return s.cvm.toDouble();
+      case 'vmap':
+        return s.vmap.toDouble();
+      case 'fcur':
+        return s.fcur;
       case 'adel':
         return s.adel.toDouble();
       case 'acel':
@@ -181,6 +191,31 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Future<String?> _pedirNombre() {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nombre del mapa'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 15,
+          textCapitalization: TextCapitalization.sentences,
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9 _.\-]'))],
+          decoration: const InputDecoration(
+            hintText: 'Ej: Pista 1 carril A',
+            helperText: 'Si ya hay uno con ese nombre, se reemplaza',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Guardar')),
+        ],
+      ),
+    );
+  }
+
   Future<bool> _confirmar(String titulo, String mensaje) async {
     final r = await showDialog<bool>(
       context: context,
@@ -230,6 +265,7 @@ class _MapScreenState extends State<MapScreen> {
               _cardPerfiles(s, conectado),
               _cardGrabar(s, conectado, corriendo),
               _cardTramos(s, conectado, corriendo),
+              _cardBiblioteca(s, conectado),
               _cardParametrosMapa(s, conectado),
               _cardAvanzado(s, conectado),
               _cardGuardar(s, conectado),
@@ -418,6 +454,17 @@ class _MapScreenState extends State<MapScreen> {
             Text(_descripcionesPerfil[_perfil], style: const TextStyle(fontSize: 12, color: Colors.white70)),
             const SizedBox(height: 6),
             for (final p in params) _filaParametro(s, p, conectado),
+            if (_perfil == 0)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Freno en curvas: 1.00 = no frena (igual que siempre). Con 0.70, cuando los sensores ven una '
+                  'curva el robot baja al 70% de la Velocidad y en la recta vuelve a la Velocidad completa. '
+                  'Como es un porcentaje de la Velocidad, si la cambiás el freno se adapta solo. '
+                  'Usa el Umbral de curva (Ajustes avanzados): mirá el gráfico del error suavizado para elegirlo.',
+                  style: TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+              ),
           ],
         ),
       ),
@@ -446,6 +493,15 @@ class _MapScreenState extends State<MapScreen> {
               'empieza la pista y las anotaría como una sola pasada larguísima. '
               'Repetí las veces que quieras: cada pasada se promedia con las anteriores.',
               style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            _filaParametro(s, _paramVmap, conectado),
+            const Text(
+              'Velocidad al grabar: si grabás muy despacio y muy centrado, las curvas casi no generan error '
+              'y se detectan como rectas. Subila hasta que las curvas se noten (mirá el gráfico del error '
+              'suavizado: en las curvas tiene que pasar el Umbral de curva). Se puede grabar más rápido que '
+              'la velocidad de curva. Los tiempos se ajustan después con \"Usar tiempos de la última carrera\".',
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
             const SizedBox(height: 10),
             Row(
@@ -496,6 +552,106 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // --- Biblioteca de mapas guardados -------------------------------------------
+  Widget _cardBiblioteca(BluetoothService s, bool conectado) {
+    final puedeEditar = conectado && s.estadoVal == 0;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _titulo(
+                    'Mapas guardados (${s.biblioteca.length}/${BluetoothService.maxMapasGuardados})',
+                    Icons.folder_open,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Actualizar la lista',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: conectado ? () => s.pedirBiblioteca() : null,
+                ),
+              ],
+            ),
+            const Text(
+              'Guardá con nombre el mapa de cada pista y cargalo cuando lo necesites. Se guardan en la '
+              'memoria del robot al instante (no hace falta \"Guardar todo\") y no se borran al grabar '
+              'otra pista. Al cargar uno, pasa a ser el mapa activo. Solo con el robot parado.',
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: (puedeEditar && s.segmentos.isNotEmpty)
+                    ? () async {
+                        final nombre = await _pedirNombre();
+                        if (nombre == null || !mounted) return;
+                        s.guardarMapaEnBiblioteca(nombre);
+                      }
+                    : null,
+                icon: const Icon(Icons.save_alt),
+                label: const Text('Guardar el mapa actual como...'),
+              ),
+            ),
+            if (s.biblioteca.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: Text('Todavía no hay mapas guardados.', style: TextStyle(fontSize: 12, color: Colors.white54)),
+              ),
+            for (final m in s.biblioteca) _filaMapaGuardado(s, m, puedeEditar),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filaMapaGuardado(BluetoothService s, MapaGuardadoInfo m, bool puedeEditar) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          const Icon(Icons.map_outlined, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(m.nombre, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis),
+                Text('${m.tramos} tramos', style: const TextStyle(fontSize: 11, color: Colors.white54)),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: puedeEditar
+                ? () async {
+                    final ok = await _confirmar('Cargar mapa',
+                        'Se reemplaza el mapa actual del robot por \"${m.nombre}\". Si el actual no está '
+                        'guardado en la biblioteca, se pierde. ¿Seguro?');
+                    if (ok) s.cargarMapaDeBiblioteca(m);
+                  }
+                : null,
+            child: const Text('Cargar'),
+          ),
+          IconButton(
+            tooltip: 'Borrar',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.delete_outline),
+            onPressed: puedeEditar
+                ? () async {
+                    final ok = await _confirmar('Borrar mapa guardado', '¿Borrar \"${m.nombre}\" de la biblioteca?');
+                    if (ok) s.borrarMapaDeBiblioteca(m);
+                  }
+                : null,
+          ),
+        ],
       ),
     );
   }
@@ -826,14 +982,18 @@ class _MapScreenState extends State<MapScreen> {
         children: [
           Text(
             '1. Modo NORMAL: tuneá Kp, Ki, Kd y velocidad en "PID y velocidad > Normal". '
-            'Es un solo PID para toda la pista y no usa el mapa.\n\n'
-            '2. Elegí la velocidad y el PID de CURVA (pestaña "Curva").\n\n'
+            'Es un solo PID para toda la pista y no usa el mapa. Si querés que frene solo en las curvas, '
+            'bajá "Freno en curvas" (por ejemplo a 0.70).\n\n'
+            '2. Elegí el PID de CURVA (pestaña "Curva") y la "Velocidad al grabar" en "Grabar la pista". '
+            'Si las curvas te salen como rectas, subí esa velocidad.\n\n'
             '3. Con el robot en el punto de largada y calibrado, tocá "Grabar pasada". Da UNA vuelta con el '
             'PID de curva y anota los tramos. Cuando vuelva al punto de largada, tocá "Terminar pasada".\n\n'
             '4. Volvé a ponerlo en el MISMO punto y repetí. Cada pasada se promedia con las anteriores: '
             'cuantas más hagas, más preciso queda. Si una pasada dura muy distinto del mapa '
             '(por ejemplo, diste dos vueltas) o sus tramos no coinciden, se descarta y te avisa.\n\n'
-            '5. Revisá la barra y la tabla de tramos y corregí lo que veas mal.\n\n'
+            '5. Revisá la barra y la tabla de tramos y corregí lo que veas mal. Cuando el mapa esté bien, '
+            'guardalo con nombre en "Mapas guardados"; para otra pista, grabá y guardá otro, y cargá el '
+            'que necesites antes de largar.\n\n'
             '6. Cargá el PID y la velocidad de RECTA (pestaña "Recta").\n\n'
             '7. Cambiá el modo a "Mapeo" y largá. Como grabaste despacio, los tiempos de las rectas van a '
             'ser más largos que los reales. Corré UNA vuelta, parala al volver al punto de largada y tocá '
