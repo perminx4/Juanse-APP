@@ -353,6 +353,9 @@ class AdvisorScreen extends StatelessWidget {
   String _resumenParams(InformeAsesor i) {
     final p = i.params;
     final r = i.rectas;
+    if (i.modo == 'Sectores') {
+      return 'Kp ${p.rkp.toStringAsFixed(1)}/${p.mkp.toStringAsFixed(1)}/${p.ckp.toStringAsFixed(1)}  VM ${p.vm}';
+    }
     if (r != null && r.nombre.startsWith('Mapa')) {
       return 'Kp ${p.rkp.toStringAsFixed(1)}  Kd ${p.rkd.toStringAsFixed(1)}  V ${p.rvm}';
     }
