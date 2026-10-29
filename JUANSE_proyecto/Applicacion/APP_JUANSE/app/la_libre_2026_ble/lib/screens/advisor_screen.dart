@@ -4,7 +4,8 @@ import '../services/bluetooth_service.dart';
 import '../services/pid_advisor.dart';
 
 /// Pestaña "Asesor": después de cada corrida muestra cómo se comportó el robot y RECOMIENDA qué
-/// parámetros tocar. No cambia nada solo: cada recomendación tiene su botón "Aplicar".
+/// parámetros tocar. Aprende de tus corridas: compara con la anterior y te dice si el último
+/// cambio mejoró o empeoró. No cambia nada solo: cada recomendación tiene su botón "Aplicar".
 class AdvisorScreen extends StatelessWidget {
   const AdvisorScreen({super.key});
 
@@ -55,7 +56,7 @@ class AdvisorScreen extends StatelessWidget {
     } else if (s.ultimoInforme == null) {
       estado = 'Largá el robot y dejalo dar una vuelta completa. Al pararlo, acá aparecen las recomendaciones.';
     } else {
-      estado = 'Listo. Corrida analizada. Podés largar otra vez para comparar.';
+      estado = 'Listo. Corrida analizada. Cambiá UNA cosa, largá otra vez y te digo si mejoró.';
     }
     return Card(
       child: Padding(
@@ -65,11 +66,11 @@ class AdvisorScreen extends StatelessWidget {
           children: [
             _titulo('Asesor de PID', Icons.insights),
             const Text(
-              'Mira cómo se comportó el error durante la corrida (si oscila, si una rueda se frena, si anda '
-              'corrido) y te sugiere qué parámetro tocar. Solo recomienda: no se cambia nada hasta que toques '
-              '"Aplicar". Cambiá de a una cosa por vez y corré de nuevo para comparar. Son reglas simples, no '
-              'una verdad absoluta: la pista manda. Para separar rectas de curvas en el modo Normal hace falta '
-              'el firmware nuevo.',
+              'Mide el error de cada corrida (rectas y curvas por separado, y cómo se estabiliza al salir de las '
+              'curvas), la compara con la anterior y te sugiere qué parámetro tocar, con su nivel de confianza. '
+              'Solo recomienda: no se cambia nada hasta que toques "Aplicar". Son reglas de control y '
+              'comparación entre corridas, no una verdad absoluta: la pista manda. Para separar rectas de curvas '
+              'en el modo Normal hace falta el firmware nuevo.',
               style: TextStyle(fontSize: 12, color: Colors.white70),
             ),
             const SizedBox(height: 8),
@@ -80,17 +81,72 @@ class AdvisorScreen extends StatelessWidget {
     );
   }
 
+  Color _colorPuntaje(int p) {
+    if (p >= 75) return Colors.greenAccent;
+    if (p >= 50) return Colors.amber;
+    return Colors.redAccent;
+  }
+
   List<Widget> _secciones(BuildContext context, BluetoothService s, InformeAsesor informe, bool conectado) {
     final puedeAplicar = conectado && s.estadoVal != 1;
     return [
+      // ---- Diagnóstico y puntaje ----
       Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _titulo('Última corrida (${informe.duracionS.toStringAsFixed(1)} s, ${_dos(informe.hora.hour)}:${_dos(informe.hora.minute)})',
-                  Icons.speed),
+              _titulo('Diagnóstico (${informe.duracionS.toStringAsFixed(1)} s, ${_dos(informe.hora.hour)}:${_dos(informe.hora.minute)})',
+                  Icons.psychology),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${informe.puntaje}',
+                    style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: _colorPuntaje(informe.puntaje)),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8, left: 4),
+                    child: Text('/ 100', style: TextStyle(fontSize: 14, color: Colors.white54)),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        'Modo ${informe.modo} · velocidad media ${informe.velocidadMedia.round()}',
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(informe.diagnostico, style: const TextStyle(fontSize: 13)),
+              if (informe.salidaEventos >= 2)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Al salir de ${informe.salidaEventos} curvas: se pasa un ${(informe.salidaSobrepaso * 100).round()}% '
+                    'para el otro lado y tarda ${informe.salidaAsentamientoS.toStringAsFixed(1)} s en calmarse.',
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      // ---- Resultado del último cambio ----
+      if (informe.evaluacion != null) _cardEvaluacion(informe.evaluacion!),
+      // ---- Tabla ----
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _titulo('Números de la corrida', Icons.speed),
               if (informe.grupos.isEmpty)
                 const Text('No hubo datos suficientes.', style: TextStyle(fontSize: 12, color: Colors.white54))
               else ...[
@@ -117,6 +173,7 @@ class AdvisorScreen extends StatelessWidget {
           ),
         ),
       ),
+      // ---- Recomendaciones ----
       if (informe.sugerencias.isNotEmpty)
         Card(
           child: Padding(
@@ -126,11 +183,13 @@ class AdvisorScreen extends StatelessWidget {
               children: [
                 _titulo('Recomendaciones', Icons.lightbulb_outline),
                 const Text(
-                  'Calculadas sobre los valores con los que corriste. Después de aplicar, tocá Guardar si querés '
-                  'que queden en el robot al apagarlo.',
+                  'Ordenadas de más a menos confiable. Aplicá solo la primera, corré de nuevo y mirá el resultado: '
+                  'así sabés qué cambio hizo qué. Calculadas sobre los valores con los que corriste; después de '
+                  'aplicar, tocá Guardar si querés que queden en el robot al apagarlo.',
                   style: TextStyle(fontSize: 11, color: Colors.white54),
                 ),
-                for (final g in informe.sugerencias) _filaSugerencia(context, s, g, puedeAplicar),
+                for (int i = 0; i < informe.sugerencias.length; i++)
+                  _filaSugerencia(context, s, informe.sugerencias[i], puedeAplicar, i == 0),
               ],
             ),
           ),
@@ -155,6 +214,62 @@ class AdvisorScreen extends StatelessWidget {
     ];
   }
 
+  Widget _cardEvaluacion(Evaluacion e) {
+    IconData icono;
+    Color color;
+    String titulo;
+    switch (e.veredicto) {
+      case 'mejoro':
+        icono = Icons.trending_up;
+        color = Colors.greenAccent;
+        titulo = 'El último cambio mejoró';
+        break;
+      case 'velocidad_ok':
+        icono = Icons.trending_up;
+        color = Colors.greenAccent;
+        titulo = 'Más velocidad y sigue estable';
+        break;
+      case 'empeoro':
+        icono = Icons.trending_down;
+        color = Colors.redAccent;
+        titulo = 'El último cambio empeoró';
+        break;
+      case 'velocidad_mal':
+        icono = Icons.trending_down;
+        color = Colors.redAccent;
+        titulo = 'Con esa velocidad ya no es estable';
+        break;
+      case 'igual':
+        icono = Icons.trending_flat;
+        color = Colors.amber;
+        titulo = 'El último cambio casi no se nota';
+        break;
+      default:
+        icono = Icons.trending_flat;
+        color = Colors.white54;
+        titulo = 'Sin cambios desde la corrida anterior';
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icono, size: 22, color: color),
+                const SizedBox(width: 8),
+                Expanded(child: Text(titulo, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color))),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(e.texto, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _filaTabla(String a, String b, String c, String d, String e, bool encabezado) {
     final estilo = TextStyle(
       fontSize: 12,
@@ -175,12 +290,35 @@ class AdvisorScreen extends StatelessWidget {
     );
   }
 
-  Widget _filaSugerencia(BuildContext context, BluetoothService s, Sugerencia g, bool puedeAplicar) {
+  Widget _chip(String texto, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color, width: 0.8),
+      ),
+      child: Text(texto, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  Widget _filaSugerencia(BuildContext context, BluetoothService s, Sugerencia g, bool puedeAplicar, bool primera) {
+    final colorConf = g.confianza >= 0.7 ? Colors.greenAccent : (g.confianza >= 0.45 ? Colors.amber : Colors.white54);
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.only(top: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              if (primera) _chip('PROBÁ ESTA PRIMERO', Colors.lightBlueAccent),
+              _chip('Confianza ${g.nivel}', colorConf),
+              if (g.origen == 'revertir') _chip('Volver atrás', Colors.redAccent),
+              if (g.origen == 'aprendizaje') _chip('Seguir la mejora', Colors.greenAccent),
+            ],
+          ),
+          const SizedBox(height: 6),
           Row(
             children: [
               Expanded(
@@ -230,7 +368,7 @@ class AdvisorScreen extends StatelessWidget {
           children: [
             _titulo('Corridas anteriores', Icons.history),
             const Text(
-              'Para comparar: si al cambiar un parámetro el error y la oscilación de las rectas bajan, vas bien.',
+              'Para comparar: el puntaje sube cuando bajan el error y la oscilación.',
               style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
             const SizedBox(height: 6),
@@ -248,12 +386,10 @@ class AdvisorScreen extends StatelessWidget {
                       child: Text(_resumenParams(i), style: const TextStyle(fontSize: 12)),
                     ),
                     Expanded(
-                      flex: 5,
+                      flex: 3,
                       child: Text(
-                        i.rectas == null
-                            ? 'sin datos de recta'
-                            : 'Error ${i.rectas!.rms.toStringAsFixed(0)} · ${i.rectas!.oscHz.toStringAsFixed(1)} Hz',
-                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        'Puntaje ${i.puntaje}',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _colorPuntaje(i.puntaje)),
                       ),
                     ),
                   ],
