@@ -19,7 +19,7 @@ class _ParamDef {
 // Tres perfiles de PID: la fórmula es la misma, cambian las ganancias y la velocidad.
 const List<_ParamDef> _perfilNormal = [
   _ParamDef('kp', 'Kp', '', 0.5, 0, 20, 1),
-  _ParamDef('ki', 'Ki', '', 0.01, 0, 1, 2),
+  _ParamDef('ki', 'Ki', '', 0.001, 0, 1, 4),
   _ParamDef('kd', 'Kd', '', 1.0, 0, 100, 1),
   _ParamDef('vm', 'Velocidad', '', 5.0, 0, 255, 0),
   _ParamDef('fcur', 'Freno en curvas (x VM)', '', 0.05, 0.2, 1.0, 2),
@@ -27,14 +27,14 @@ const List<_ParamDef> _perfilNormal = [
 
 const List<_ParamDef> _perfilRecta = [
   _ParamDef('rkp', 'Kp recta', '', 0.5, 0, 20, 1),
-  _ParamDef('rki', 'Ki recta', '', 0.01, 0, 1, 2),
+  _ParamDef('rki', 'Ki recta', '', 0.001, 0, 1, 4),
   _ParamDef('rkd', 'Kd recta', '', 1.0, 0, 100, 1),
   _ParamDef('rvm', 'Velocidad recta', '', 5.0, 0, 255, 0),
 ];
 
 const List<_ParamDef> _perfilCurva = [
   _ParamDef('ckp', 'Kp curva', '', 0.5, 0, 20, 1),
-  _ParamDef('cki', 'Ki curva', '', 0.01, 0, 1, 2),
+  _ParamDef('cki', 'Ki curva', '', 0.001, 0, 1, 4),
   _ParamDef('ckd', 'Kd curva', '', 1.0, 0, 100, 1),
   _ParamDef('cvm', 'Velocidad curva', '', 5.0, 0, 255, 0),
 ];
