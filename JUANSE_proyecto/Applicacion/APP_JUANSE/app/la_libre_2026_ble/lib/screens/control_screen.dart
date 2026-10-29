@@ -16,8 +16,9 @@ class ControlScreen extends StatefulWidget {
 
 class _ControlScreenState extends State<ControlScreen> {
   final Map<String, double> _controlValues = {
-    'kp': 3.0, 'ki': 0.0, 'kd': 35.0, 'vm': 255.0,
+    'kp': 3.0, 'ki': 0.0, 'kd': 35.0, 'vm': 255.0, 'fcur': 1.0,
   };
+  double _ultimoFcurRobot = 1.0; // último freno en curvas informado por el robot
   Map<String, double> _previousControlValues = {};
   bool _valuesInitialized = false;
 
@@ -26,7 +27,18 @@ class _ControlScreenState extends State<ControlScreen> {
     'ki': {'min': 0, 'max': 1},
     'kd': {'min': 0, 'max': 100},
     'vm': {'min': 100, 'max': 255},
+    'fcur': {'min': 0.2, 'max': 1.0},
   };
+
+  // Formato con el que se muestra y se manda cada parámetro (el Ki es chico: 4 decimales)
+  String _fmt(String key, double v) {
+    if (key == 'ki') return v.toStringAsFixed(4);
+    if (key == 'fcur' || ['vb', 'fb', 'kf', 'psup', 'pinf'].contains(key)) return v.toStringAsFixed(2);
+    if (['kp', 'kd', 'ab'].contains(key)) return v.toStringAsFixed(1);
+    return v.toInt().toString();
+  }
+
+  String _etiqueta(String key) => key == 'fcur' ? 'FRENO CURVA (x VM)' : key.toUpperCase();
 
   Future<void> _saveProfile() async {
     final profileNameController = TextEditingController();
@@ -80,7 +92,7 @@ class _ControlScreenState extends State<ControlScreen> {
         final decodedData = jsonDecode(profileData) as Map<String, dynamic>;
         setState(() {
           _controlValues.forEach((key, value) {
-            _controlValues[key] = (decodedData[key] ?? 0.0).toDouble();
+            _controlValues[key] = (decodedData[key] ?? (key == 'fcur' ? 1.0 : 0.0)).toDouble();
           });
         });
         _controlValues.forEach((key, value) {
@@ -101,14 +113,7 @@ class _ControlScreenState extends State<ControlScreen> {
     String key = command.toLowerCase();
     if (key == 've') key = 'vm';
 
-    String formattedValue;
-    if (key == 'ki') {
-      formattedValue = value.toStringAsFixed(2);
-    } else if (['kp', 'kd'].contains(key)) {
-      formattedValue = value.toStringAsFixed(1);
-    } else {
-      formattedValue = value.toInt().toString();
-    }
+    final String formattedValue = _fmt(key, value);
     bluetoothService.sendCommand("$key:$formattedValue");
     _showFeedback('Enviado: $key:$formattedValue');
   }
@@ -119,6 +124,18 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 
   void _syncValuesFromDevice(BluetoothService service) {
+    // El freno en curvas llega en otro paquete que el resto: se sigue aparte para no quedar desfasado
+    if (service.fcur != _ultimoFcurRobot) {
+      final double nuevoFcur = service.fcur;
+      _ultimoFcurRobot = nuevoFcur;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _controlValues['fcur'] = nuevoFcur;
+          });
+        }
+      });
+    }
     if (!_valuesInitialized) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -160,6 +177,7 @@ class _ControlScreenState extends State<ControlScreen> {
       case 'kd': return double.tryParse(service.kd) ?? _controlValues['kd']!;
       case 'vm':
       case 've': return double.tryParse(service.ve) ?? _controlValues['vm']!;
+      case 'fcur': return service.fcur;
       case 'mc': return double.tryParse(service.mc) ?? _controlValues['mc']!;
       case 'ab': return double.tryParse(service.ab) ?? _controlValues['ab']!;
       case 'vb': return double.tryParse(service.vb) ?? _controlValues['vb']!;
@@ -175,7 +193,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (!service.isConnected) return false;
     final double robotVal = _getRobotValue(key, service);
     final double appVal = _controlValues[key] ?? 0.0;
-    final double tolerance = key == 'ki' ? 0.005 : 0.05;
+    final double tolerance = key == 'ki' ? 0.00005 : (key == 'fcur' ? 0.005 : 0.05);
     return (robotVal - appVal).abs() > tolerance;
   }
 
@@ -983,14 +1001,7 @@ class _ControlScreenState extends State<ControlScreen> {
       if (key == 've') key = 'vm';
 
       double value = _controlValues[rawKey]!;
-      String formattedValue;
-      if (['ki', 'vb', 'fb', 'kf', 'psup', 'pinf'].contains(key)) {
-        formattedValue = value.toStringAsFixed(2);
-      } else if (['kp', 'kd', 'ab'].contains(key)) {
-        formattedValue = value.toStringAsFixed(1);
-      } else {
-        formattedValue = value.toInt().toString();
-      }
+      final String formattedValue = _fmt(key, value);
       service.sendCommand("$key:$formattedValue");
       sentCount++;
       await Future.delayed(const Duration(milliseconds: 100));
@@ -1037,9 +1048,7 @@ class _ControlScreenState extends State<ControlScreen> {
             const Divider(height: 12),
             ..._controlValues.entries.map((entry) {
               final key = entry.key;
-              final isFloat2 = ['ki', 'vb', 'fb', 'kf', 'psup', 'pinf'].contains(key);
-              final isFloat1 = ['kp', 'kd', 'ab'].contains(key);
-              final step = settings.steps[key] ?? 1.0;
+              final step = key == 'fcur' ? 0.05 : (key == 'ki' ? 0.001 : (settings.steps[key] ?? 1.0));
               final min = _parameterRanges[key]!['min']!;
               final max = _parameterRanges[key]!['max']!;
 
@@ -1047,11 +1056,7 @@ class _ControlScreenState extends State<ControlScreen> {
               final double? prevVal = _previousControlValues[key];
               final bool hasPreviousDiff = prevVal != null && (prevVal - currentVal).abs() > 0.001;
 
-              final String prevValStr = prevVal != null
-                  ? (isFloat2
-                      ? prevVal.toStringAsFixed(2)
-                      : (isFloat1 ? prevVal.toStringAsFixed(1) : prevVal.toInt().toString()))
-                  : "";
+              final String prevValStr = prevVal != null ? _fmt(key, prevVal) : "";
 
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -1067,7 +1072,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             runSpacing: 2,
                             children: [
                               Text(
-                                key.toUpperCase(),
+                                _etiqueta(key),
                                 style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
                               ),
                               if (hasPreviousDiff)
@@ -1107,13 +1112,9 @@ class _ControlScreenState extends State<ControlScreen> {
                         GestureDetector(
                           onTap: () => _editValueWithKeyboard(key),
                           child: SizedBox(
-                            width: 48,
+                            width: 60,
                             child: Text(
-                              isFloat2
-                                  ? _controlValues[key]!.toStringAsFixed(2)
-                                  : (isFloat1
-                                      ? _controlValues[key]!.toStringAsFixed(1)
-                                      : _controlValues[key]!.toInt().toString()),
+                              _fmt(key, _controlValues[key]!),
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
