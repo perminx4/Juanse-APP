@@ -5,6 +5,7 @@ import 'console_screen.dart';
 import 'sessions_screen.dart'; // <-- Importa la nueva pantalla
 import 'map_screen.dart';
 import 'advisor_screen.dart';
+import 'sectores_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
     GraphScreen(),
     ConsoleScreen(),
     MapScreen(),
+    SectoresScreen(),
     AdvisorScreen(),
     SessionsScreen(), // <-- Nueva pestaña
   ];
@@ -58,6 +60,10 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Mapa',
           ),
           BottomNavigationBarItem(
+            icon: Icon(Icons.linear_scale),
+            label: 'Sectores',
+          ),
+          BottomNavigationBarItem(
             icon: Icon(Icons.insights),
             label: 'Asesor',
           ),
@@ -70,6 +76,8 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: _onItemTapped,
         // --- AÑADIDO: Estilo para que se vean todas las pestañas ---
         type: BottomNavigationBarType.fixed,
+        selectedFontSize: 11,
+        unselectedFontSize: 10,
       ),
     );
   }
