@@ -131,7 +131,7 @@ class BluetoothService with ChangeNotifier {
   DateTime? _t0Corrida;
   ParamsCorrida? _paramsCorrida;
   InformeAsesor? ultimoInforme;
-  final List<InformeAsesor> historialInformes = []; // las últimas 5, la más nueva primero
+  final List<InformeAsesor> historialInformes = []; // las últimas 8, la más nueva primero
   bool get grabandoCorrida => _registrando;
   int get muestrasCorridaActual => _muestrasCorrida.length;
 
@@ -537,7 +537,7 @@ class BluetoothService with ChangeNotifier {
       }
 
       if (jsonData.containsKey('KI') && jsonData['KI'] != null) {
-        _ki = (jsonData['KI'] as num).toDouble().toStringAsFixed(2);
+        _ki = (jsonData['KI'] as num).toDouble().toStringAsFixed(4);
         configKeyFound = true;
       }
 
@@ -703,10 +703,10 @@ class BluetoothService with ChangeNotifier {
     _registrando = false;
     final params = _paramsCorrida;
     if (params != null && _muestrasCorrida.length >= 40) {
-      final informe = analizarCorrida(List<MuestraCorrida>.of(_muestrasCorrida), params);
+      final informe = analizarCorrida(List<MuestraCorrida>.of(_muestrasCorrida), params, anteriores: historialInformes);
       ultimoInforme = informe;
       historialInformes.insert(0, informe);
-      if (historialInformes.length > 5) historialInformes.removeLast();
+      if (historialInformes.length > 8) historialInformes.removeLast();
     }
     _muestrasCorrida.clear();
   }
