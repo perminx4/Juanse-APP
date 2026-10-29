@@ -42,6 +42,8 @@ class ParamsCorrida {
   final int cvm;
   final double fcur;
   final int umb;
+  final double mkp, mki, mkd; // PID medio (modo Sectores)
+  final double frap, fmed, flen; // factor de VM de cada PID (modo Sectores)
   const ParamsCorrida({
     this.kp = 3,
     this.ki = 0,
@@ -57,6 +59,12 @@ class ParamsCorrida {
     this.cvm = 150,
     this.fcur = 1.0,
     this.umb = 80,
+    this.mkp = 3,
+    this.mki = 0,
+    this.mkd = 35,
+    this.frap = 1.0,
+    this.fmed = 0.8,
+    this.flen = 0.5,
   });
 }
 
@@ -156,7 +164,7 @@ class InformeAsesor {
   EstadisticasGrupo? get rectas {
     EstadisticasGrupo? mejor;
     for (final g in grupos) {
-      if (g.nombre.contains('rectas') && (mejor == null || g.muestras > mejor.muestras)) mejor = g;
+      if ((g.nombre.contains('rectas') || g.nombre.contains('rápido')) && (mejor == null || g.muestras > mejor.muestras)) mejor = g;
     }
     return mejor;
   }
@@ -167,7 +175,18 @@ const int gNormalRecta = 0;
 const int gNormalCurva = 1;
 const int gRecta = 2;
 const int gCurva = 3;
-const List<String> nombresGrupo = ['Normal · rectas', 'Normal · curvas', 'Mapa · rectas', 'Mapa · curvas'];
+const int gRapido = 4; // modo Sectores
+const int gMedio = 5;
+const int gLento = 6;
+const List<String> nombresGrupo = [
+  'Normal · rectas',
+  'Normal · curvas',
+  'Mapa · rectas',
+  'Mapa · curvas',
+  'Sectores · rápido',
+  'Sectores · medio',
+  'Sectores · lento',
+];
 
 // Umbrales de las reglas (todos juntos para poder ajustarlos)
 const double _minSegRecta = 1.5; // menos que esto en rectas: pocos datos
@@ -181,15 +200,17 @@ const double _transitorioFinMs = 300; // y el final
 const double _cambioSignificativo = 0.12; // 12% de cambio en el costo = mejora/empeora de verdad
 const double _kiMaxSeguro = 0.004; // Ki*10000 es lo máximo que puede aportar el integral (se satura en ±10000)
 const double _kiIntegralMax = 10000; // clamp del integral en el firmware
-const Set<String> _cmdsVelocidad = {'vm', 'rvm', 'cvm', 'fcur'};
+const Set<String> _cmdsVelocidad = {'vm', 'rvm', 'cvm', 'fcur', 'frap', 'fmed', 'flen'};
 
 int _grupoDe(MuestraCorrida m) {
+  // En el modo Sectores 'tr' trae el tipo de sector: 0 rápido, 1 medio, 2 lento
+  if (m.md == 3) return m.tr == 1 ? gMedio : (m.tr == 2 ? gLento : gRapido);
   if (m.md == 0) return m.tr == 1 ? gNormalCurva : gNormalRecta;
   if (m.md == 1) return gCurva; // al grabar se usa el perfil de curva
   return m.tr == 1 ? gCurva : gRecta;
 }
 
-bool _esRecta(int g) => g == gNormalRecta || g == gRecta;
+bool _esRecta(int g) => g == gNormalRecta || g == gRecta || g == gRapido;
 
 class _Acum {
   int n = 0;
@@ -221,6 +242,12 @@ _Perfil _perfilDe(int g, ParamsCorrida p) {
       return _Perfil('kp', 'ki', 'kd', 'vm', 'Normal', p.kp, p.ki, p.kd, p.vm);
     case gRecta:
       return _Perfil('rkp', 'rki', 'rkd', 'rvm', 'Recta', p.rkp, p.rki, p.rkd, p.rvm);
+    case gRapido:
+      return _Perfil('rkp', 'rki', 'rkd', 'vm', 'Rápido', p.rkp, p.rki, p.rkd, p.vm);
+    case gMedio:
+      return _Perfil('mkp', 'mki', 'mkd', 'vm', 'Medio', p.mkp, p.mki, p.mkd, p.vm);
+    case gLento:
+      return _Perfil('ckp', 'cki', 'ckd', 'vm', 'Lento', p.ckp, p.cki, p.ckd, p.vm);
     default:
       return _Perfil('ckp', 'cki', 'ckd', 'cvm', 'Curva', p.ckp, p.cki, p.ckd, p.cvm);
   }
@@ -389,13 +416,27 @@ _Salidas _analizarSalidas(List<MuestraCorrida> d, int mdObjetivo, double minErrC
 }
 
 /// Lista de parámetros que cambiaron entre dos corridas (solo los del modo que se usó).
-List<CambioParam> cambiosEntre(ParamsCorrida a, ParamsCorrida b, bool normal) {
+List<CambioParam> cambiosEntre(ParamsCorrida a, ParamsCorrida b, String modo) {
   final out = <CambioParam>[];
   void ver(String cmd, String etiqueta, double antes, double despues, int dec, double tol) {
     if ((antes - despues).abs() > tol) out.add(CambioParam(cmd, etiqueta, antes, despues, dec));
   }
 
-  if (normal) {
+  if (modo == 'Sectores') {
+    ver('rkp', 'Kp (Rápido)', a.rkp, b.rkp, 1, 0.05);
+    ver('rki', 'Ki (Rápido)', a.rki, b.rki, 4, 0.00005);
+    ver('rkd', 'Kd (Rápido)', a.rkd, b.rkd, 1, 0.05);
+    ver('mkp', 'Kp (Medio)', a.mkp, b.mkp, 1, 0.05);
+    ver('mki', 'Ki (Medio)', a.mki, b.mki, 4, 0.00005);
+    ver('mkd', 'Kd (Medio)', a.mkd, b.mkd, 1, 0.05);
+    ver('ckp', 'Kp (Lento)', a.ckp, b.ckp, 1, 0.05);
+    ver('cki', 'Ki (Lento)', a.cki, b.cki, 4, 0.00005);
+    ver('ckd', 'Kd (Lento)', a.ckd, b.ckd, 1, 0.05);
+    ver('vm', 'VM', a.vm.toDouble(), b.vm.toDouble(), 0, 0.5);
+    ver('frap', '% Rápido', a.frap, b.frap, 2, 0.005);
+    ver('fmed', '% Medio', a.fmed, b.fmed, 2, 0.005);
+    ver('flen', '% Lento', a.flen, b.flen, 2, 0.005);
+  } else if (modo == 'Normal') {
     ver('kp', 'Kp', a.kp, b.kp, 1, 0.05);
     ver('ki', 'Ki', a.ki, b.ki, 4, 0.00005);
     ver('kd', 'Kd', a.kd, b.kd, 1, 0.05);
@@ -433,12 +474,12 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
   final a1 = math.max(8.0, 0.20 * umb); // curvas
 
   // ---------------- 1) Estadísticas por grupo ----------------
-  final acum = List<_Acum>.generate(4, (_) => _Acum());
+  final acum = List<_Acum>.generate(7, (_) => _Acum());
   MuestraCorrida? prev;
   int grupoPrev = -1;
   int lado = 0;
   int inicioTandaMs = 0;
-  int cuentaNormal = 0, cuentaMapa = 0;
+  int cuentaNormal = 0, cuentaMapa = 0, cuentaSect = 0;
   double sumaVel = 0;
   for (final m in datos) {
     final g = _grupoDe(m);
@@ -473,6 +514,8 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
     }
     if (m.md == 0) {
       cuentaNormal++;
+    } else if (m.md == 3) {
+      cuentaSect++;
     } else {
       cuentaMapa++;
     }
@@ -484,8 +527,8 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
     if (a.actual.isNotEmpty) a.tandas.add(a.actual);
   }
 
-  final stats = List<EstadisticasGrupo?>.filled(4, null);
-  for (int g = 0; g < 4; g++) {
+  final stats = List<EstadisticasGrupo?>.filled(7, null);
+  for (int g = 0; g < 7; g++) {
     final a = acum[g];
     if (a.n == 0) continue;
     a.abs.sort();
@@ -507,13 +550,14 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
     );
   }
 
-  final esNormal = cuentaNormal >= cuentaMapa;
-  final modo = esNormal ? 'Normal' : 'Mapa';
+  final esSectores = cuentaSect > cuentaNormal && cuentaSect >= cuentaMapa;
+  final esNormal = !esSectores && cuentaNormal >= cuentaMapa;
+  final modo = esSectores ? 'Sectores' : (esNormal ? 'Normal' : 'Mapa');
   final velocidadMedia = datos.isEmpty ? 0.0 : sumaVel / datos.length;
 
   // ---------------- 2) Costo y puntaje de la corrida ----------------
   double costo = 0, peso = 0;
-  for (int g = 0; g < 4; g++) {
+  for (int g = 0; g < 7; g++) {
     final st = stats[g];
     if (st == null || st.segundos < 0.5) continue;
     final recta = _esRecta(g);
@@ -526,7 +570,8 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
   final puntaje = peso > 0 ? (100 * math.exp(-1.5 * costo)).round() : 0;
 
   // ---------------- 3) Salidas de curva ----------------
-  final sal = _analizarSalidas(datos, esNormal ? 0 : 2, math.max(2 * a0, 0.5 * umb), a0);
+  // En el modo Sectores no hay detección de curva: no se analiza la salida de curva
+  final sal = esSectores ? _Salidas() : _analizarSalidas(datos, esNormal ? 0 : 2, math.max(2 * a0, 0.5 * umb), a0);
 
   final salidaProblematica = sal.eventos >= 2 && ((sal.sobrepaso > 0.35 && sal.asentamientoS > 0.4) || (sal.sobrepaso < 0.10 && sal.asentamientoS > 0.7));
 
@@ -547,7 +592,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
   }
   final valido = peso >= 2.0;
   if (previo != null && valido) {
-    final cambios = cambiosEntre(previo.params, p, esNormal);
+    final cambios = cambiosEntre(previo.params, p, modo);
     if (cambios.isEmpty) {
       evaluacion = Evaluacion(cambios, 'sin_cambios', previo.puntaje.toDouble(), puntaje.toDouble(),
           'No cambiaste ningún parámetro desde la corrida anterior: el puntaje pasó de ${previo.puntaje} a $puntaje '
@@ -595,7 +640,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
   }
 
   // ---------------- 5) Reglas por grupo (primero rectas, después curvas) ----------------
-  for (final g in const [gNormalRecta, gRecta, gNormalCurva, gCurva]) {
+  for (final g in const [gNormalRecta, gRecta, gRapido, gNormalCurva, gCurva, gMedio, gLento]) {
     final st = stats[g];
     if (st == null) continue;
     final pf = _perfilDe(g, p);
@@ -607,6 +652,23 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       continue;
     }
     hayDatosBuenos = true;
+
+    // Sector medio (zig-zag): cruza la línea a propósito, así que no se mira la oscilación.
+    // Solo se vigila que una rueda no se frene de más.
+    if (g == gMedio) {
+      if (st.satCero > _satCurva) {
+        hayProblema = true;
+        problemas.add('una rueda se frena en el sector medio (${_pct(st.satCero)})');
+        final v = _ajustar(p.fmed, 0.9, dec: 2, min: 0.1, max: 1.0);
+        if (v != null) {
+          c.agregar(Sugerencia('fmed', '% Medio (de VM)', p.fmed, v, 2,
+              'En ${st.nombre} una rueda llega a 0 el ${_pct(st.satCero)} del tiempo: entra demasiado rápido. '
+              'Bajá el porcentaje de velocidad del sector medio.',
+              confianza: _conf(st.satCero / _satCurva, st.segundos)));
+        }
+      }
+      continue;
+    }
 
     if (recta) {
       bool problema = false;
@@ -735,6 +797,14 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
                   confianza: conf));
             }
           }
+        } else if (g == gLento) {
+          final v = _ajustar(p.flen, 0.9, dec: 2, min: 0.1, max: 1.0);
+          if (v != null) {
+            c.agregar(Sugerencia('flen', '% Lento (de VM)', p.flen, v, 2,
+                'En ${st.nombre} una rueda llega a 0 el ${_pct(st.satCero)} del tiempo: entra demasiado rápido. '
+                'Bajá el porcentaje de velocidad del sector lento.',
+                confianza: conf));
+          }
         } else {
           final v = _ajustarEntero(pf.vel, 0.9);
           if (v != null) {
@@ -837,15 +907,18 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
 
   // ---------------- 8) Todo bien: se puede probar más velocidad ----------------
   if (hayDatosBuenos && !hayProblema && c.lista.isEmpty) {
-    final g = esNormal ? gNormalRecta : gRecta;
+    final g = esSectores ? gRapido : (esNormal ? gNormalRecta : gRecta);
     final st = stats[g];
     if (st != null && st.segundos >= _minSegRecta) {
       final pf = _perfilDe(g, p);
       final v = _ajustarEntero(pf.vel, 1.08);
       if (v != null && v > pf.vel) {
-        c.agregar(Sugerencia(pf.velCmd, 'Velocidad (${pf.nombre})', pf.vel.toDouble(), v.toDouble(), 0,
-            'Las rectas se ven estables (error RMS ${st.rms.toStringAsFixed(0)}, sin oscilación). Podés '
-            'probar un poco más de velocidad y volver a correr.',
+        c.agregar(Sugerencia(pf.velCmd, esSectores ? 'VM (velocidad base)' : 'Velocidad (${pf.nombre})', pf.vel.toDouble(), v.toDouble(), 0,
+            esSectores
+                ? 'El sector rápido se ve estable (error RMS ${st.rms.toStringAsFixed(0)}, sin oscilación). Podés '
+                    'probar un poco más de VM (se escalan los tres sectores) y volver a correr.'
+                : 'Las rectas se ven estables (error RMS ${st.rms.toStringAsFixed(0)}, sin oscilación). Podés '
+                    'probar un poco más de velocidad y volver a correr.',
             confianza: 0.5));
       }
     }
