@@ -25,6 +25,21 @@ class MapSeg {
   MapSeg(this.tipo, this.ms);
 }
 
+/// Un sector de la pista (modo Sectores): tipo 0 = rápido, 1 = medio, 2 = lento, y cuánto dura (ms).
+class Sector {
+  final int tipo;
+  final int ms;
+  Sector(this.tipo, this.ms);
+}
+
+/// Una tabla de sectores guardada con nombre en el robot.
+class SectoresGuardadoInfo {
+  final int lugar; // posición dentro de la biblioteca de sectores del robot
+  final String nombre;
+  final int sectores; // cuántos sectores tiene
+  SectoresGuardadoInfo(this.lugar, this.nombre, this.sectores);
+}
+
 /// Un mapa guardado con nombre en la biblioteca del robot.
 class MapaGuardadoInfo {
   final int lugar; // posición dentro de la biblioteca del robot (la usa para cargar/borrar)
@@ -89,7 +104,7 @@ class BluetoothService with ChangeNotifier {
   List<int> get sensors => List.unmodifiable(_sensors);
 
   // --- Mapa de pista y perfil de curva (firmware con mapeo) ---
-  int _md = 0; // modo de corrida: 0 normal, 1 mapeando, 2 carrera con mapa
+  int _md = 0; // modo de corrida: 0 normal, 1 mapeando, 2 carrera con mapa, 3 sectores
   int _tr = 0; // tramo detectado por los sensores: 0 recta, 1 curva
   int _ea = 0; // error absoluto suavizado (para elegir el umbral de curva)
   int _sg = -1; // tramo actual del mapa en carrera (-1 = ninguno)
@@ -124,6 +139,16 @@ class BluetoothService with ChangeNotifier {
   static const int maxMapasGuardados = 12;
   final List<MapaGuardadoInfo> biblioteca = [];
   String _nombrePendiente = "";
+
+  // --- Modo Sectores: 3 PID (rápido, medio, lento) y una lista de sectores con su tiempo ---
+  double mkp = 3.0, mki = 0.0, mkd = 35.0; // PID medio (el rápido es el de "recta" y el lento el de "curva")
+  double frap = 1.0, fmed = 0.8, flen = 0.5; // factor de VM de cada PID
+  int tant = 100; // terminar antes (ms)
+  bool usarSectores = false;
+  static const int maxSectores = 24;
+  final List<Sector> sectores = [];
+  final List<SectoresGuardadoInfo> bibSectores = [];
+  int get modoLargada => usarSectores ? 2 : (usarMapa ? 1 : 0); // 0 normal, 1 mapa con detección, 2 sectores
 
   // --- Asesor de PID: se graba cada corrida y al pararla se analiza (solo recomienda, no cambia nada) ---
   final List<MuestraCorrida> _muestrasCorrida = [];
@@ -344,6 +369,13 @@ class BluetoothService with ChangeNotifier {
       Future.delayed(const Duration(milliseconds: 1300), () {
         sendCommand("mlist");
       });
+      // Tabla de sectores y sectores guardados
+      Future.delayed(const Duration(milliseconds: 1700), () {
+        sendCommand("secget");
+      });
+      Future.delayed(const Duration(milliseconds: 2100), () {
+        sendCommand("slist");
+      });
 
     } catch (e) {
       _status = BLEStatus.disconnected;
@@ -410,6 +442,7 @@ class BluetoothService with ChangeNotifier {
     _ea = 0;
     _sg = -1;
     biblioteca.clear();
+    bibSectores.clear();
   }
 
   void _startRssiMonitoring(BluetoothDevice device) {
@@ -468,12 +501,22 @@ class BluetoothService with ChangeNotifier {
         notifyListeners();
         return;
       }
+      if (jsonData.containsKey('SecI')) {
+        _handleSecChunk(jsonData);
+        notifyListeners();
+        return;
+      }
+      if (jsonData.containsKey('SLibI')) {
+        _handleSLibChunk(jsonData);
+        notifyListeners();
+        return;
+      }
       if (jsonData.containsKey('MapI')) {
         _handleMapChunk(jsonData);
         notifyListeners();
         return;
       }
-      if (jsonData.containsKey('RKP') || jsonData.containsKey('ADEL')) {
+      if (jsonData.containsKey('RKP') || jsonData.containsKey('ADEL') || jsonData.containsKey('MKP')) {
         _handleExtraConfig(jsonData);
         notifyListeners();
         return;
@@ -645,6 +688,23 @@ class BluetoothService with ChangeNotifier {
     usarMapa = i('MAPA', usarMapa ? 1 : 0) != 0;
     pasadas = i('PAS', pasadas);
 
+    // Modo Sectores
+    mkp = d('MKP', mkp);
+    mki = d('MKI', mki);
+    mkd = d('MKD', mkd);
+    frap = d('FRAP', frap);
+    fmed = d('FMED', fmed);
+    flen = d('FLEN', flen);
+    tant = i('TANT', tant);
+    usarSectores = i('SECT', usarSectores ? 1 : 0) != 0;
+    final ns = i('NSEC', sectores.length);
+    if (ns < sectores.length) {
+      sectores.removeRange(ns, sectores.length);
+    }
+    while (sectores.length < ns) {
+      sectores.add(Sector(0, 0));
+    }
+
     final n = i('NSEG', segmentos.length);
     if (n < segmentos.length) {
       segmentos.removeRange(n, segmentos.length);
@@ -671,6 +731,12 @@ class BluetoothService with ChangeNotifier {
       cvm: cvm,
       fcur: fcur,
       umb: umb,
+      mkp: mkp,
+      mki: mki,
+      mkd: mkd,
+      frap: frap,
+      fmed: fmed,
+      flen: flen,
     );
   }
 
@@ -690,7 +756,8 @@ class BluetoothService with ChangeNotifier {
         int.tryParse(_l) ?? 0,
         int.tryParse(_r) ?? 0,
         _md,
-        _tr,
+        // En el modo Sectores, el asesor agrupa por tipo de sector (rápido/medio/lento)
+        _md == 3 ? ((_sg >= 0 && _sg < sectores.length) ? sectores[_sg].tipo : 0) : _tr,
       ));
     }
     if (!corriendo && _registrando) {
@@ -730,6 +797,49 @@ class BluetoothService with ChangeNotifier {
       }
     }
     if (biblioteca.length > n) biblioteca.removeRange(n, biblioteca.length);
+  }
+
+  /// Tabla de sectores: llega de a 8, en orden: {"SecI":0,"SecN":5,"Sec":[[tipo,ms],...]}
+  void _handleSecChunk(Map<String, dynamic> j) {
+    final start = (j['SecI'] is num) ? (j['SecI'] as num).toInt() : 0;
+    final n = (j['SecN'] is num) ? (j['SecN'] as num).toInt() : 0;
+    if (n < sectores.length) {
+      sectores.removeRange(n, sectores.length);
+    }
+    while (sectores.length < n) {
+      sectores.add(Sector(0, 0));
+    }
+    final lista = j['Sec'];
+    if (lista is List) {
+      for (int k = 0; k < lista.length; k++) {
+        final item = lista[k];
+        final idx = start + k;
+        if (item is List && item.length >= 2 && idx < sectores.length) {
+          sectores[idx] = Sector((item[0] as num).toInt(), (item[1] as num).toInt());
+        }
+      }
+    }
+  }
+
+  /// Sectores guardados: {"SLibI":0,"SLibN":3,"SLib":[[lugar,"nombre",sectores],...]}
+  void _handleSLibChunk(Map<String, dynamic> j) {
+    final start = (j['SLibI'] is num) ? (j['SLibI'] as num).toInt() : 0;
+    final n = (j['SLibN'] is num) ? (j['SLibN'] as num).toInt() : 0;
+    if (start == 0) bibSectores.clear();
+    if (start != bibSectores.length) return; // paquete fuera de orden: se espera la próxima lista
+    final lista = j['SLib'];
+    if (lista is List) {
+      for (final item in lista) {
+        if (item is List && item.length >= 3) {
+          bibSectores.add(SectoresGuardadoInfo(
+            (item[0] as num).toInt(),
+            item[1].toString(),
+            (item[2] as num).toInt(),
+          ));
+        }
+      }
+    }
+    if (bibSectores.length > n) bibSectores.removeRange(n, bibSectores.length);
   }
 
   void _handleMapChunk(Map<String, dynamic> j) {
@@ -795,6 +905,27 @@ class BluetoothService with ChangeNotifier {
         default:
           _avisar("No se pudo: el robot tiene que estar parado (ni corriendo ni calibrando) y el mapa tiene que existir.");
       }
+    } else if (a == 'slib') {
+      final cd = (j['Cd'] is num) ? (j['Cd'] as num).toInt() : 0;
+      switch (cd) {
+        case 14:
+          _avisar("Sectores \"$_nombrePendiente\" guardados");
+          break;
+        case 15:
+          _avisar("No hay sectores para guardar. Armá la lista primero.");
+          break;
+        case 16:
+          _avisar("Ya hay $maxMapasGuardados tablas de sectores guardadas. Borrá alguna para guardar otra.");
+          break;
+        case 17:
+          _avisar("Sectores \"$_nombrePendiente\" cargados. Es la tabla activa del robot.");
+          break;
+        case 18:
+          _avisar("Sectores borrados de la lista guardada");
+          break;
+        default:
+          _avisar("No se pudo: el robot tiene que estar parado (ni corriendo ni calibrando) y la tabla tiene que existir.");
+      }
     } else if (a == 'adoptado') {
       carreraLista = false;
       _avisar("Tiempos del mapa actualizados con los de la última carrera");
@@ -856,6 +987,90 @@ class BluetoothService with ChangeNotifier {
   /// Pide al robot la lista de mapas guardados.
   Future<void> pedirBiblioteca() async {
     await sendCommand("mlist");
+  }
+
+  /// Elige el modo de largada: 0 = Normal, 1 = Mapa con detección, 2 = Sectores.
+  Future<void> setModoLargada(int modo) async {
+    usarMapa = (modo == 1);
+    usarSectores = (modo == 2);
+    notifyListeners();
+    await sendCommand("mapa:${modo == 1 ? 1 : 0}");
+    await Future.delayed(const Duration(milliseconds: 60));
+    await sendCommand("sect:${modo == 2 ? 1 : 0}");
+  }
+
+  /// Cambia un sector (en la app y en el robot). tipo: 0 rápido, 1 medio, 2 lento.
+  Future<void> editarSector(int i, int tipo, int ms) async {
+    if (i < 0 || i >= maxSectores) return;
+    final msOk = ms.clamp(0, 65535).toInt();
+    final tipoOk = tipo.clamp(0, 2).toInt();
+    while (sectores.length <= i) {
+      sectores.add(Sector(0, 0));
+    }
+    sectores[i] = Sector(tipoOk, msOk);
+    notifyListeners();
+    await sendCommand("sec:$i,$tipoOk,$msOk");
+  }
+
+  /// Agrega un sector al final (1000 ms para editar después).
+  Future<void> agregarSector(int tipo, {int ms = 1000}) async {
+    final i = sectores.length;
+    if (i >= maxSectores) return;
+    await editarSector(i, tipo, ms);
+  }
+
+  /// Borra el sector i y corre los siguientes.
+  Future<void> eliminarSector(int i) async {
+    if (i < 0 || i >= sectores.length) return;
+    final copia = List<Sector>.from(sectores);
+    copia.removeAt(i);
+    for (int j = i; j < copia.length; j++) {
+      await sendCommand("sec:$j,${copia[j].tipo},${copia[j].ms}");
+      await Future.delayed(const Duration(milliseconds: 60));
+    }
+    await sendCommand("secn:${copia.length}");
+    sectores
+      ..clear()
+      ..addAll(copia);
+    notifyListeners();
+  }
+
+  /// Intercambia el sector i con el de al lado (delta = -1 sube, +1 baja).
+  Future<void> moverSector(int i, int delta) async {
+    final j = i + delta;
+    if (i < 0 || j < 0 || i >= sectores.length || j >= sectores.length) return;
+    final a = sectores[i];
+    final b = sectores[j];
+    sectores[i] = b;
+    sectores[j] = a;
+    notifyListeners();
+    await sendCommand("sec:$i,${b.tipo},${b.ms}");
+    await Future.delayed(const Duration(milliseconds: 60));
+    await sendCommand("sec:$j,${a.tipo},${a.ms}");
+  }
+
+  /// Guarda la tabla de sectores actual del robot con ese nombre (si ya existe, la reemplaza).
+  Future<void> guardarSectoresEnBiblioteca(String nombre) async {
+    final n = limpiarNombreMapa(nombre);
+    _nombrePendiente = n;
+    await sendCommand("ssave:$n");
+  }
+
+  /// Carga una tabla de sectores guardada como tabla actual del robot.
+  Future<void> cargarSectoresDeBiblioteca(SectoresGuardadoInfo m) async {
+    _nombrePendiente = m.nombre;
+    await sendCommand("sload:${m.lugar}");
+  }
+
+  /// Borra una tabla de sectores guardada.
+  Future<void> borrarSectoresDeBiblioteca(SectoresGuardadoInfo m) async {
+    _nombrePendiente = m.nombre;
+    await sendCommand("sdel:${m.lugar}");
+  }
+
+  /// Pide al robot la lista de sectores guardados.
+  Future<void> pedirBibSectores() async {
+    await sendCommand("slist");
   }
 
   /// Elige el modo de largada: false = normal (un solo PID), true = con mapa.
