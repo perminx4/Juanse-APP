@@ -326,21 +326,25 @@ class _MapScreenState extends State<MapScreen> {
             _titulo('Modo de largada', Icons.flag),
             SizedBox(
               width: double.infinity,
-              child: SegmentedButton<bool>(
+              child: SegmentedButton<int>(
                 segments: const [
-                  ButtonSegment<bool>(value: false, label: Text('Normal'), icon: Icon(Icons.speed)),
-                  ButtonSegment<bool>(value: true, label: Text('Mapeo'), icon: Icon(Icons.map)),
+                  ButtonSegment<int>(value: 0, label: Text('Normal'), icon: Icon(Icons.speed)),
+                  ButtonSegment<int>(value: 1, label: Text('Mapeo'), icon: Icon(Icons.map)),
+                  ButtonSegment<int>(value: 2, label: Text('Sectores'), icon: Icon(Icons.linear_scale)),
                 ],
-                selected: {s.usarMapa},
-                onSelectionChanged: (conectado && !corriendo) ? (sel) => s.setUsarMapa(sel.first) : null,
+                selected: {s.modoLargada},
+                onSelectionChanged: (conectado && !corriendo) ? (sel) => s.setModoLargada(sel.first) : null,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              s.usarMapa
-                  ? 'MAPEO: usa el PID de recta en las rectas y el de curva en las curvas, '
-                      'y frena antes de cada curva según el mapa.'
-                  : 'NORMAL: un solo PID, con su velocidad. Ignora el mapa. Es el modo seguro.',
+              s.modoLargada == 2
+                  ? 'SECTORES: sigue la lista de sectores que armás a mano (pestaña Sectores), cambiando de PID '
+                      'solo por tiempo. No usa este mapa.'
+                  : (s.modoLargada == 1
+                      ? 'MAPEO: usa el PID de recta en las rectas y el de curva en las curvas, '
+                          'y frena antes de cada curva según el mapa.'
+                      : 'NORMAL: un solo PID, con su velocidad. Ignora el mapa. Es el modo seguro.'),
               style: const TextStyle(fontSize: 13, color: Colors.white70),
             ),
             if (sinMapa)
@@ -381,6 +385,9 @@ class _MapScreenState extends State<MapScreen> {
         break;
       case 2:
         modoTxt = 'MAPEO';
+        break;
+      case 3:
+        modoTxt = 'SECTORES';
         break;
       default:
         modoTxt = 'NORMAL';
