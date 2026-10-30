@@ -22,20 +22,24 @@ class _ControlScreenState extends State<ControlScreen> {
   Map<String, double> _previousControlValues = {};
   bool _valuesInitialized = false;
 
-  final Map<String, Map<String, double>> _parameterRanges = {
-    'kp': {'min': 0, 'max': 20},
-    'ki': {'min': 0, 'max': 1},
-    'kd': {'min': 0, 'max': 100},
-    'vm': {'min': 0, 'max': 255},
-    'fcur': {'min': 0.2, 'max': 1.0},
-  };
+  // Sin topes: podés poner el valor que quieras (el firmware solo limita el PWM a 0-255, que es el máximo del ESP32).
 
   // Formato con el que se muestra y se manda cada parámetro (el Ki es chico: 4 decimales)
+  // Número tal cual lo tipeaste: SIN redondear (hasta 8 decimales, sin ceros de más)
+  String _numTxt(double v) {
+    if (v.isNaN || v.isInfinite) return '0';
+    var s = v.toStringAsFixed(8);
+    if (s.contains('.') && !s.contains('e')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '');
+      if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
+
+  // El PWM (VM) es entero; todo lo demás se manda tal cual lo tipeaste
   String _fmt(String key, double v) {
-    if (key == 'ki') return v.toStringAsFixed(4);
-    if (key == 'fcur' || ['vb', 'fb', 'kf', 'psup', 'pinf'].contains(key)) return v.toStringAsFixed(2);
-    if (['kp', 'kd', 'ab'].contains(key)) return v.toStringAsFixed(1);
-    return v.toInt().toString();
+    if (key == 'vm' || key == 'mc') return v.round().toString();
+    return _numTxt(v);
   }
 
   String _etiqueta(String key) => key == 'fcur' ? 'FRENO CURVA (x VM)' : key.toUpperCase();
@@ -193,12 +197,13 @@ class _ControlScreenState extends State<ControlScreen> {
     if (!service.isConnected) return false;
     final double robotVal = _getRobotValue(key, service);
     final double appVal = _controlValues[key] ?? 0.0;
-    final double tolerance = key == 'ki' ? 0.00005 : (key == 'fcur' ? 0.005 : 0.05);
+    // El robot informa con 7 cifras significativas: se compara con esa precisión
+    final double tolerance = key == 'vm' ? 0.5 : (robotVal.abs() * 1e-6 > 1e-7 ? robotVal.abs() * 1e-6 : 1e-7);
     return (robotVal - appVal).abs() > tolerance;
   }
 
   Future<void> _editValueWithKeyboard(String key) async {
-    final textController = TextEditingController(text: _controlValues[key].toString());
+    final textController = TextEditingController(text: _fmt(key, _controlValues[key] ?? 0.0));
     final newValue = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -215,13 +220,13 @@ class _ControlScreenState extends State<ControlScreen> {
       ),
     );
     if (newValue != null) {
-      final doubleValue = double.tryParse(newValue);
+      final doubleValue = double.tryParse(newValue.trim().replaceAll(',', '.'));
       if (doubleValue != null) {
-        final min = _parameterRanges[key]!['min']!;
-        final max = _parameterRanges[key]!['max']!;
         setState(() {
-          _controlValues[key] = doubleValue.clamp(min, max);
+          _controlValues[key] = doubleValue;
         });
+        // Al aceptar un valor tipeado se manda al robot en el momento (y la app muestra qué mandó)
+        _sendControlValue(key, doubleValue);
       }
     }
   }
@@ -1011,6 +1016,39 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 
   // --- CONTROLES DE PARÁMETROS ---
+  // Qué velocidad usa cada modo, y aviso cuando el PID domina y VM casi no se nota
+  Widget _avisoVelocidad(BluetoothService service) {
+    final int l = int.tryParse(service.l) ?? 0;
+    final int r = int.tryParse(service.r) ?? 0;
+    final double vm = double.tryParse(service.ve) ?? 0;
+    final int menor = l < r ? l : r;
+    final int mayor = l < r ? r : l;
+    final bool pidDomina = service.estadoVal == 1 &&
+        (service.modoCorrida == 0 || service.modoCorrida == 3) &&
+        menor == 0 &&
+        mayor > vm + 30;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Velocidad: Normal usa VM · Mapeo usa "Velocidad recta/curva" (pestaña Mapa) · Sectores usa VM × el % de cada PID. '
+          'Los valores tipeados se mandan al aceptar; con −/+ se mandan con el botón de enviar.',
+          style: TextStyle(fontSize: 11, color: Colors.white54),
+        ),
+        if (pidDomina)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '⚠️ El PID está mandando una rueda a 0 y la otra a $mayor (VM es ${vm.round()}). La corrección '
+              '(Kp × error + Kd × cambio) es mayor que VM: por eso cambiar VM casi no se nota. Bajá Kp/Kd o subí VM.',
+              style: const TextStyle(fontSize: 12, color: Colors.orangeAccent),
+            ),
+          ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
   Widget _buildParameterControls(BluetoothService service) {
     final settings = Provider.of<SettingsService>(context);
     final Color themeColor = service.isLowBattery ? Colors.redAccent : Colors.blueAccent;
@@ -1047,11 +1085,10 @@ class _ControlScreenState extends State<ControlScreen> {
               ],
             ),
             const Divider(height: 12),
+            _avisoVelocidad(service),
             ..._controlValues.entries.map((entry) {
               final key = entry.key;
               final step = key == 'fcur' ? 0.05 : (key == 'ki' ? 0.001 : (settings.steps[key] ?? 1.0));
-              final min = _parameterRanges[key]!['min']!;
-              final max = _parameterRanges[key]!['max']!;
 
               final double currentVal = _controlValues[key] ?? 0.0;
               final double? prevVal = _previousControlValues[key];
@@ -1105,7 +1142,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             icon: const Icon(Icons.remove, size: 18),
                             onPressed: () {
                               setState(() {
-                                _controlValues[key] = (_controlValues[key]! - step).clamp(min, max);
+                                _controlValues[key] = _controlValues[key]! - step;
                               });
                             },
                           ),
@@ -1113,15 +1150,18 @@ class _ControlScreenState extends State<ControlScreen> {
                         GestureDetector(
                           onTap: () => _editValueWithKeyboard(key),
                           child: SizedBox(
-                            width: 60,
-                            child: Text(
-                              _fmt(key, _controlValues[key]!),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                            width: 64,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                _fmt(key, _controlValues[key]!),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                                textAlign: TextAlign.center,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ),
                         ),
@@ -1133,7 +1173,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             icon: const Icon(Icons.add, size: 18),
                             onPressed: () {
                               setState(() {
-                                _controlValues[key] = (_controlValues[key]! + step).clamp(min, max);
+                                _controlValues[key] = _controlValues[key]! + step;
                               });
                             },
                           ),
