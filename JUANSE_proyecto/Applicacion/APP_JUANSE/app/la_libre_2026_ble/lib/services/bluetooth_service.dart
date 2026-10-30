@@ -25,6 +25,17 @@ class MapSeg {
   MapSeg(this.tipo, this.ms);
 }
 
+/// Número tal cual: hasta 8 decimales, sin ceros de más (así no se pierde lo que el robot informa).
+String _numStr(double v) {
+  if (v.isNaN || v.isInfinite) return '0';
+  var s = v.toStringAsFixed(8);
+  if (s.contains('.') && !s.contains('e')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return s;
+}
+
 /// Un sector de la pista (modo Sectores): tipo 0 = rápido, 1 = medio, 2 = lento, y cuánto dura (ms).
 class Sector {
   final int tipo;
@@ -575,17 +586,17 @@ class BluetoothService with ChangeNotifier {
       bool configKeyFound = false;
 
       if (jsonData.containsKey('KP') && jsonData['KP'] != null) {
-        _kp = (jsonData['KP'] as num).toDouble().toStringAsFixed(1);
+        _kp = _numStr((jsonData['KP'] as num).toDouble());
         configKeyFound = true;
       }
 
       if (jsonData.containsKey('KI') && jsonData['KI'] != null) {
-        _ki = (jsonData['KI'] as num).toDouble().toStringAsFixed(4);
+        _ki = _numStr((jsonData['KI'] as num).toDouble());
         configKeyFound = true;
       }
 
       if (jsonData.containsKey('KD') && jsonData['KD'] != null) {
-        _kd = (jsonData['KD'] as num).toDouble().toStringAsFixed(1);
+        _kd = _numStr((jsonData['KD'] as num).toDouble());
         configKeyFound = true;
       }
 
