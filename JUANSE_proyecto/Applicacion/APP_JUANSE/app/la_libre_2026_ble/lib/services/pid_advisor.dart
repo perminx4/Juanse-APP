@@ -68,6 +68,17 @@ class ParamsCorrida {
   });
 }
 
+/// Número para mostrar y mandar: entero si [dec] es 0; si no, hasta 8 decimales sin ceros de más (nada de redondear a 1 decimal).
+String _fmtNum(double v, int dec) {
+  if (dec == 0) return v.round().toString();
+  var s = v.toStringAsFixed(8);
+  if (s.contains('.') && !s.contains('e')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return s;
+}
+
 /// Una recomendación: cambiar el parámetro [cmd] de [actual] a [sugerido].
 class Sugerencia {
   final String cmd; // comando del firmware (kp, ki, kd, vm, fcur, rkp, ckp, ...)
@@ -81,8 +92,8 @@ class Sugerencia {
   const Sugerencia(this.cmd, this.etiqueta, this.actual, this.sugerido, this.decimales, this.motivo,
       {this.confianza = 0.5, this.origen = 'regla'});
 
-  String get actualTexto => actual.toStringAsFixed(decimales);
-  String get sugeridoTexto => sugerido.toStringAsFixed(decimales);
+  String get actualTexto => _fmtNum(actual, decimales);
+  String get sugeridoTexto => _fmtNum(sugerido, decimales);
   String get nivel => confianza >= 0.7 ? 'alta' : (confianza >= 0.45 ? 'media' : 'baja');
 }
 
@@ -94,7 +105,7 @@ class CambioParam {
   final double despues;
   final int decimales;
   const CambioParam(this.cmd, this.etiqueta, this.antes, this.despues, this.decimales);
-  String get texto => '$etiqueta ${antes.toStringAsFixed(decimales)} → ${despues.toStringAsFixed(decimales)}';
+  String get texto => '$etiqueta ${_fmtNum(antes, decimales)} → ${_fmtNum(despues, decimales)}';
 }
 
 /// Resultado de comparar esta corrida con la anterior.
@@ -255,7 +266,12 @@ _Perfil _perfilDe(int g, ParamsCorrida p) {
 
 /// Multiplica [actual] por [factor] redondeando a [dec] decimales. Si el redondeo no lo mueve, lo mueve
 /// un paso. Devuelve null si no hay forma de cambiarlo (por los límites).
-double? _ajustar(double actual, double factor, {int dec = 1, double min = 0.1, double max = 100}) {
+double? _ajustar(double actual, double factor, {int dec = 1, double min = 0, double max = 1e12}) {
+  // Con valores chicos se usan más decimales (si no, 0.085 se redondearía a 0.1 y no cambiaría nada)
+  final objetivo = (actual * factor).abs();
+  while (dec < 6 && objetivo < 2 * math.pow(10, -dec)) {
+    dec++;
+  }
   final escala = math.pow(10, dec).toDouble();
   final a = (actual * escala).round() / escala;
   var v = (actual * factor * escala).round() / escala;
@@ -659,7 +675,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       if (st.satCero > _satCurva) {
         hayProblema = true;
         problemas.add('una rueda se frena en el sector medio (${_pct(st.satCero)})');
-        final v = _ajustar(p.fmed, 0.9, dec: 2, min: 0.1, max: 1.0);
+        final v = _ajustar(p.fmed, 0.9, dec: 2, min: 0.1, max: 10.0);
         if (v != null) {
           c.agregar(Sugerencia('fmed', '% Medio (de VM)', p.fmed, v, 2,
               'En ${st.nombre} una rueda llega a 0 el ${_pct(st.satCero)} del tiempo: entra demasiado rápido. '
@@ -681,7 +697,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
         final reg = st.periodicidad > 0.5 ? ' (muy regular: es una oscilación de verdad, no ruido)' : '';
         if (st.oscHz < _oscRapidaHz) {
           problemas.add('oscilación en rectas (~${st.oscHz.toStringAsFixed(1)} Hz)');
-          final v = _ajustar(pf.kp, 0.85, dec: 1, min: 0.1, max: 20);
+          final v = _ajustar(pf.kp, 0.85, dec: 1, min: 0, max: 1e12);
           if (v != null) {
             c.agregar(Sugerencia(
                 pf.kpCmd,
@@ -696,7 +712,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
           }
         } else {
           problemas.add('vibración rápida en rectas (~${st.oscHz.toStringAsFixed(1)} Hz)');
-          final v = _ajustar(pf.kd, 0.8, dec: 1, min: 0, max: 100);
+          final v = _ajustar(pf.kd, 0.8, dec: 1, min: 0, max: 1e12);
           if (v != null) {
             c.agregar(Sugerencia(
                 pf.kdCmd,
@@ -724,7 +740,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       if (st.satCero > _satRecta) {
         problema = true;
         problemas.add('una rueda se frena en rectas (${_pct(st.satCero)})');
-        final v = _ajustar(pf.kp, 0.8, dec: 1, min: 0.1, max: 20);
+        final v = _ajustar(pf.kp, 0.8, dec: 1, min: 0, max: 1e12);
         if (v != null) {
           c.agregar(Sugerencia(
               pf.kpCmd,
@@ -790,7 +806,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
                 'Activá el freno en curvas (0.80 = en curva va al 80% de la velocidad).',
                 confianza: conf));
           } else {
-            final v = _ajustar(p.fcur, 0.9, dec: 2, min: 0.3, max: 1.0);
+            final v = _ajustar(p.fcur, 0.9, dec: 2, min: 0.3, max: 10.0);
             if (v != null) {
               c.agregar(Sugerencia('fcur', 'Freno en curvas', p.fcur, v, 2,
                   'Aun con freno, una rueda llega a 0 el ${_pct(st.satCero)} del tiempo en curva. Frená un poco más.',
@@ -798,7 +814,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
             }
           }
         } else if (g == gLento) {
-          final v = _ajustar(p.flen, 0.9, dec: 2, min: 0.1, max: 1.0);
+          final v = _ajustar(p.flen, 0.9, dec: 2, min: 0.1, max: 10.0);
           if (v != null) {
             c.agregar(Sugerencia('flen', '% Lento (de VM)', p.flen, v, 2,
                 'En ${st.nombre} una rueda llega a 0 el ${_pct(st.satCero)} del tiempo: entra demasiado rápido. '
@@ -820,7 +836,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       if (oscila) {
         problema = true;
         problemas.add('zigzaguea en curvas (~${st.oscHz.toStringAsFixed(1)} Hz)');
-        final v = _ajustar(pf.kp, 0.85, dec: 1, min: 0.1, max: 20);
+        final v = _ajustar(pf.kp, 0.85, dec: 1, min: 0, max: 1e12);
         if (v != null) {
           c.agregar(Sugerencia(pf.kpCmd, 'Kp (${pf.nombre})', pf.kp, v, 1,
               'En ${st.nombre} el robot zigzaguea (~${st.oscHz.toStringAsFixed(1)} veces por segundo) mientras '
@@ -832,7 +848,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       if (!oscila && st.satCero < 0.20 && st.mediaAbs > 2.2 * umb) {
         problema = true;
         problemas.add('se abre en curvas (error ~${st.mediaAbs.toStringAsFixed(0)})');
-        final v = _ajustar(pf.kp, 1.2, dec: 1, min: 0.1, max: 20);
+        final v = _ajustar(pf.kp, 1.2, dec: 1, min: 0, max: 1e12);
         if (v != null) {
           c.agregar(Sugerencia(pf.kpCmd, 'Kp (${pf.nombre})', pf.kp, v, 1,
               'En ${st.nombre} el error se mantiene alto (~${st.mediaAbs.toStringAsFixed(0)}): al robot le falta '
@@ -864,7 +880,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
         }
       }
       final kdBase = pf.kd > 0 ? pf.kd : math.max(1.0, pf.kp * 10);
-      final v = pf.kd > 0 ? _ajustar(pf.kd, 1.25, dec: 1, min: 0, max: 100) : (kdBase * 10).round() / 10;
+      final v = pf.kd > 0 ? _ajustar(pf.kd, 1.25, dec: 1, min: 0, max: 1e12) : (kdBase * 10).round() / 10;
       if (v != null && v != pf.kd) {
         c.agregar(Sugerencia(pf.kdCmd, 'Kd ($nombre)', pf.kd, v, 1,
             'Al salir de ${sal.eventos} curvas el robot se pasa ${_pct(sal.sobrepaso)} para el otro lado y tarda '
@@ -874,7 +890,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
     } else if (sal.sobrepaso < 0.10 && sal.asentamientoS > 0.7) {
       hayProblema = true;
       problemas.add('tarda en recuperarse al salir de las curvas (${sal.asentamientoS.toStringAsFixed(1)} s)');
-      final v = _ajustar(pf.kp, 1.2, dec: 1, min: 0.1, max: 20);
+      final v = _ajustar(pf.kp, 1.2, dec: 1, min: 0, max: 1e12);
       if (v != null) {
         c.agregar(Sugerencia(pf.kpCmd, 'Kp ($nombre)', pf.kp, v, 1,
             'Al salir de ${sal.eventos} curvas el robot tarda ${sal.asentamientoS.toStringAsFixed(1)} s en volver '
@@ -893,7 +909,7 @@ InformeAsesor analizarCorrida(List<MuestraCorrida> crudas, ParamsCorrida p,
       final seguir = f == 1.0 ? null : math.pow(f, 0.7).toDouble();
       if (seguir != null) {
         final dec = x.decimales;
-        final nuevo = _ajustar(x.despues, seguir, dec: dec, min: dec == 4 ? 0.0 : 0.1, max: dec == 4 ? _kiMaxSeguro : 100);
+        final nuevo = _ajustar(x.despues, seguir, dec: dec, min: 0.0, max: dec == 4 ? _kiMaxSeguro : 1e12);
         if (nuevo != null) {
           c.agregar(Sugerencia(x.cmd, x.etiqueta, x.despues, nuevo, dec,
               'Cambiar ${x.etiqueta} de ${x.antes.toStringAsFixed(dec)} a ${x.despues.toStringAsFixed(dec)} mejoró '
