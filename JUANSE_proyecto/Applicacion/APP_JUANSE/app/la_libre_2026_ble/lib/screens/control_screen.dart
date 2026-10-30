@@ -26,7 +26,7 @@ class _ControlScreenState extends State<ControlScreen> {
     'kp': {'min': 0, 'max': 20},
     'ki': {'min': 0, 'max': 1},
     'kd': {'min': 0, 'max': 100},
-    'vm': {'min': 100, 'max': 255},
+    'vm': {'min': 0, 'max': 255},
     'fcur': {'min': 0.2, 'max': 1.0},
   };
 
