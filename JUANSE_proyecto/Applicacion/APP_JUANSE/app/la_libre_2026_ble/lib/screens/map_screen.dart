@@ -149,16 +149,26 @@ class _MapScreenState extends State<MapScreen> {
     return 0;
   }
 
+  // Número tal cual lo tipeaste: SIN redondear (hasta 8 decimales, sin ceros de más)
+  String _numTxt(double v) {
+    if (v.isNaN || v.isInfinite) return '0';
+    var s = v.toStringAsFixed(8);
+    if (s.contains('.') && !s.contains('e')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '');
+      if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
+
   String _formato(_ParamDef p, double v) {
-    return p.decimales == 0 ? v.round().toString() : v.toStringAsFixed(p.decimales);
+    return p.decimales == 0 ? v.round().toString() : _numTxt(v);
   }
 
   // Cambia un parámetro: se muestra al instante y se envía 0,4 s después del último toque
   void _cambiar(BluetoothService s, _ParamDef p, double nuevo) {
     double v = nuevo;
-    if (v < p.min) v = p.min;
-    if (v > p.max) v = p.max;
-    v = double.parse(v.toStringAsFixed(p.decimales));
+    // Sin topes. Solo se saca el ruido de los decimales (0.30000000000000004 -> 0.3); lo que tipeás no se redondea.
+    v = p.decimales == 0 ? v.roundToDouble() : double.parse(_numTxt(v));
     setState(() => _local[p.cmd] = v);
 
     _timersEnvio[p.cmd]?.cancel();
@@ -936,7 +946,10 @@ class _MapScreenState extends State<MapScreen> {
                   : null,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(texto, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(texto, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15)),
+                ),
               ),
             ),
           ),
