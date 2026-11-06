@@ -641,13 +641,12 @@ class _ControlScreenState extends State<ControlScreen> {
             const Divider(height: 12),
             const SizedBox(height: 6),
 
-            // --- MODO DE LARGADA: Normal (un solo PID), Mapeo (detecta rectas y curvas) o Sectores (lista a mano) ---
+            // --- MODO DE LARGADA: Normal (un solo PID) o Sectores (lista a mano) ---
             SizedBox(
               width: double.infinity,
               child: SegmentedButton<int>(
                 segments: const [
                   ButtonSegment<int>(value: 0, label: Text('Normal'), icon: Icon(Icons.speed)),
-                  ButtonSegment<int>(value: 1, label: Text('Mapeo'), icon: Icon(Icons.map)),
                   ButtonSegment<int>(value: 2, label: Text('Sectores'), icon: Icon(Icons.linear_scale)),
                 ],
                 selected: {service.modoLargada},
@@ -968,8 +967,9 @@ class _ControlScreenState extends State<ControlScreen> {
             Row(
               children: [
                 _dataDisplayItem("Pista", service.lineaBlanca == "1" ? "Blanca (B)" : "Negra (N)"),
-                _dataDisplayItem("Largada", service.modoLargada == 2 ? "Sectores" : (service.modoLargada == 1 ? "Mapeo" : "Normal")),
-                _dataDisplayItem(service.modoLargada == 2 ? "Sectores" : "Tramos", (service.modoLargada == 2 ? service.sectores.length : service.segmentos.length).toString()),
+                _dataDisplayItem("Largada", service.modoLargada == 2 ? "Sectores" : "Normal"),
+                _dataDisplayItem("Sectores", service.sectores.length.toString()),
+                _dataDisplayItem("Lazo", service.lazoHz > 0 ? "${service.lazoHz} Hz" : "—"),
               ],
             ),
           ],
@@ -1031,7 +1031,7 @@ class _ControlScreenState extends State<ControlScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Velocidad: Normal usa VM · Mapeo usa "Velocidad recta/curva" (pestaña Mapa) · Sectores usa VM × el % de cada PID. '
+          'Velocidad: Normal usa VM · Sectores usa VM × el % de cada PID. '
           'Los valores tipeados se mandan al aceptar; con −/+ se mandan con el botón de enviar.',
           style: TextStyle(fontSize: 11, color: Colors.white54),
         ),
