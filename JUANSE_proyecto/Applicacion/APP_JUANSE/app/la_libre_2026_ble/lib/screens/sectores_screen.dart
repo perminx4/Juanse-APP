@@ -16,7 +16,7 @@ class _Par {
   const _Par(this.cmd, this.label, this.unidad, this.paso, this.min, this.max, this.decimales);
 }
 
-// Los tres PID. El rápido es el de "recta" y el lento el de "curva" del modo Mapa; el medio tiene el suyo.
+// Los tres PID: rápido, medio y lento (cada uno con su Kp, Ki, Kd y su % de VM).
 const List<_Par> _pidRapido = [
   _Par('rkp', 'Kp', '', 0.1, 0, 20, 1),
   _Par('rki', 'Ki', '', 0.001, 0, 1, 4),
@@ -290,9 +290,6 @@ class _SectoresScreenState extends State<SectoresScreen> {
       case 2:
         texto = 'SECTORES: el robot sigue la lista de sectores de abajo, cambiando de PID solo por tiempo.';
         break;
-      case 1:
-        texto = 'MAPEO: detecta rectas y curvas con los sensores (modo anterior, pestaña Mapa).';
-        break;
       default:
         texto = 'NORMAL: un solo PID para toda la pista.';
     }
@@ -308,7 +305,6 @@ class _SectoresScreenState extends State<SectoresScreen> {
               child: SegmentedButton<int>(
                 segments: const [
                   ButtonSegment<int>(value: 0, label: Text('Normal'), icon: Icon(Icons.speed)),
-                  ButtonSegment<int>(value: 1, label: Text('Mapeo'), icon: Icon(Icons.map)),
                   ButtonSegment<int>(value: 2, label: Text('Sectores'), icon: Icon(Icons.linear_scale)),
                 ],
                 selected: {s.modoLargada},
@@ -577,8 +573,7 @@ class _SectoresScreenState extends State<SectoresScreen> {
             _titulo('Los 3 PID', Icons.tune),
             const Text(
               'Cada PID tiene su Kp, Ki y Kd y su velocidad como porcentaje de VM: si cambiás VM, los tres se '
-              'escalan juntos. El PID rápido es el mismo que "Recta" y el lento el mismo que "Curva" en el modo '
-              'Mapeo (la velocidad de esos dos solo cuenta allá).',
+              'escalan juntos. Las velocidades se aplican directo, sin rampas.',
               style: TextStyle(fontSize: 12, color: Colors.white70),
             ),
             const SizedBox(height: 6),
@@ -620,8 +615,7 @@ class _SectoresScreenState extends State<SectoresScreen> {
               onChanged: conectado ? (v) => s.setRepetir(v) : null,
             ),
             const Text(
-              'Los cambios de velocidad entre PID usan una rampa para que las ruedas no patinen. Se regula en '
-              'Mapa → Ajustes avanzados (subida y bajada de velocidad).',
+              'Los cambios de velocidad entre sectores se aplican directo (sin rampa), así el robot no pierde tiempo.',
               style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
