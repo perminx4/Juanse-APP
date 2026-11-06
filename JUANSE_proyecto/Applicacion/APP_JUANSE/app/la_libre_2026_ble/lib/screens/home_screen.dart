@@ -3,7 +3,6 @@ import 'control_screen.dart';
 import 'graph_screen.dart';
 import 'console_screen.dart';
 import 'sessions_screen.dart'; // <-- Importa la nueva pantalla
-import 'map_screen.dart';
 import 'advisor_screen.dart';
 import 'sectores_screen.dart';
 
@@ -22,7 +21,6 @@ class _HomeScreenState extends State<HomeScreen> {
     ControlScreen(),
     GraphScreen(),
     ConsoleScreen(),
-    MapScreen(),
     SectoresScreen(),
     AdvisorScreen(),
     SessionsScreen(), // <-- Nueva pestaña
@@ -54,10 +52,6 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.terminal),
             label: 'Consola',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map),
-            label: 'Mapa',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.linear_scale),
