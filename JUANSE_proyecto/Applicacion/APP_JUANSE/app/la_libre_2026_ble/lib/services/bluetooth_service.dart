@@ -118,11 +118,13 @@ class BluetoothService with ChangeNotifier {
   int _md = 0; // modo de corrida: 0 normal, 1 mapeando, 2 carrera con mapa, 3 sectores
   int _tr = 0; // tramo detectado por los sensores: 0 recta, 1 curva
   int _ea = 0; // error absoluto suavizado (para elegir el umbral de curva)
-  int _sg = -1; // tramo actual del mapa en carrera (-1 = ninguno)
+  int _sg = -1; // sector actual en modo Sectores (-1 = ninguno)
+  int _hz = 0; // veces por segundo que el robot ejecuta su lazo de control (sensores + PID)
   int get modoCorrida => _md;
   int get tramoDetectado => _tr;
   int get errorAbsSuave => _ea;
   int get segmentoActual => _sg;
+  int get lazoHz => _hz;
 
   // Perfiles de PID del modo con mapa y parámetros del mapa
   // (los manda el robot en "refresh" y tras cada cambio)
@@ -159,7 +161,7 @@ class BluetoothService with ChangeNotifier {
   static const int maxSectores = 24;
   final List<Sector> sectores = [];
   final List<SectoresGuardadoInfo> bibSectores = [];
-  int get modoLargada => usarSectores ? 2 : (usarMapa ? 1 : 0); // 0 normal, 1 mapa con detección, 2 sectores
+  int get modoLargada => usarSectores ? 2 : 0; // 0 normal, 2 sectores (el modo mapeo ya no existe)
 
   // --- Asesor de PID: se graba cada corrida y al pararla se analiza (solo recomienda, no cambia nada) ---
   final List<MuestraCorrida> _muestrasCorrida = [];
@@ -372,14 +374,6 @@ class BluetoothService with ChangeNotifier {
       Future.delayed(const Duration(milliseconds: 300), () {
         sendCommand("refresh");
       });
-      // El mapa se pide aparte (llega en bloques chicos)
-      Future.delayed(const Duration(milliseconds: 900), () {
-        sendCommand("mapget");
-      });
-      // La lista de mapas guardados también llega aparte
-      Future.delayed(const Duration(milliseconds: 1300), () {
-        sendCommand("mlist");
-      });
       // Tabla de sectores y sectores guardados
       Future.delayed(const Duration(milliseconds: 1700), () {
         sendCommand("secget");
@@ -452,6 +446,7 @@ class BluetoothService with ChangeNotifier {
     _tr = 0;
     _ea = 0;
     _sg = -1;
+    _hz = 0;
     biblioteca.clear();
     bibSectores.clear();
   }
@@ -555,6 +550,7 @@ class BluetoothService with ChangeNotifier {
       if (jsonData['Tr'] is num) _tr = (jsonData['Tr'] as num).toInt();
       if (jsonData['Ea'] is num) _ea = (jsonData['Ea'] as num).toInt();
       if (jsonData['Sg'] is num) _sg = (jsonData['Sg'] as num).toInt();
+      if (jsonData['Hz'] is num) _hz = (jsonData['Hz'] as num).toInt();
 
       if (jsonData.containsKey('Pos') && jsonData['Pos'] != null) {
         _posInt = (jsonData['Pos'] as num).toInt();
@@ -1000,13 +996,10 @@ class BluetoothService with ChangeNotifier {
     await sendCommand("mlist");
   }
 
-  /// Elige el modo de largada: 0 = Normal, 1 = Mapa con detección, 2 = Sectores.
+  /// Elige el modo de largada: 0 = Normal, 2 = Sectores.
   Future<void> setModoLargada(int modo) async {
-    usarMapa = (modo == 1);
     usarSectores = (modo == 2);
     notifyListeners();
-    await sendCommand("mapa:${modo == 1 ? 1 : 0}");
-    await Future.delayed(const Duration(milliseconds: 60));
     await sendCommand("sect:${modo == 2 ? 1 : 0}");
   }
 
