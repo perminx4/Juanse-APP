@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/bluetooth_service.dart';
 import '../services/pid_advisor.dart';
+import 'resumen_corrida_card.dart';
 
 /// Pestaña "Asesor": después de cada corrida muestra cómo se comportó el robot y RECOMIENDA qué
 /// parámetros tocar. Aprende de tus corridas: compara con la anterior y te dice si el último
@@ -23,6 +24,7 @@ class AdvisorScreen extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             children: [
               _cardEstado(s, conectado),
+              ResumenCorridaCard(s: s, conBotonPrueba: false),
               if (informe != null) ..._secciones(context, s, informe, conectado),
               if (s.historialInformes.length > 1) _cardHistorial(s),
             ],
