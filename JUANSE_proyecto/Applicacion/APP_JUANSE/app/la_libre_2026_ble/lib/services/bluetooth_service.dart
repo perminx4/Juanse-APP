@@ -43,6 +43,28 @@ class Sector {
   Sector(this.tipo, this.ms);
 }
 
+/// Resumen de una corrida medido por el ROBOT en cada ciclo del lazo de control (no son las muestras
+/// de 20 Hz de la telemetría). Llega una vez al parar: {"Run":ms,"Mo":modo,"Nc":ciclos,...}
+class ResumenCorrida {
+  final DateTime hora;
+  final int ms; // cuánto duró
+  final int modo; // 0 normal, 3 sectores, 4 prueba a fondo
+  final int ciclos; // vueltas del lazo de control
+  final int hz; // ciclos por segundo
+  final double vo; // velocidad pedida media (PWM)
+  final double vi; // PWM medio rueda izquierda
+  final double vd; // PWM medio rueda derecha
+  final double rc; // % del tiempo con una rueda en 0
+  final double ap; // |Kp × error| medio (PWM)
+  final double ai; // |Ki × integral| medio (PWM)
+  final double ad; // |Kd × cambio del error| medio (PWM)
+  final double ed; // |cambio del error| medio entre dos ciclos
+  ResumenCorrida(this.hora, this.ms, this.modo, this.ciclos, this.hz, this.vo, this.vi, this.vd, this.rc, this.ap,
+      this.ai, this.ad, this.ed);
+
+  double get velMedia => (vi + vd) / 2;
+}
+
 /// Una tabla de sectores guardada con nombre en el robot.
 class SectoresGuardadoInfo {
   final int lugar; // posición dentro de la biblioteca de sectores del robot
@@ -120,11 +142,17 @@ class BluetoothService with ChangeNotifier {
   int _ea = 0; // error absoluto suavizado (para elegir el umbral de curva)
   int _sg = -1; // sector actual en modo Sectores (-1 = ninguno)
   int _hz = 0; // veces por segundo que el robot ejecuta su lazo de control (sensores + PID)
+  double _rz = 0; // ruido de los sensores con el robot QUIETO (|cambio del error| entre dos lecturas)
   int get modoCorrida => _md;
   int get tramoDetectado => _tr;
   int get errorAbsSuave => _ea;
   int get segmentoActual => _sg;
   int get lazoHz => _hz;
+  double get ruidoReposo => _rz;
+
+  // Resumen de la última corrida, medido por el robot (llega al pararlo)
+  ResumenCorrida? ultimoResumen;
+  int resumenId = 0;
 
   // Perfiles de PID del modo con mapa y parámetros del mapa
   // (los manda el robot en "refresh" y tras cada cambio)
@@ -447,6 +475,7 @@ class BluetoothService with ChangeNotifier {
     _ea = 0;
     _sg = -1;
     _hz = 0;
+    _rz = 0;
     biblioteca.clear();
     bibSectores.clear();
   }
@@ -532,6 +561,11 @@ class BluetoothService with ChangeNotifier {
         notifyListeners();
         return;
       }
+      if (jsonData.containsKey('Run')) {
+        _handleResumen(jsonData);
+        notifyListeners();
+        return;
+      }
 
       // --- 1. CARGA FIJA (OBLIGATORIA EN CADA PAQUETE a 20Hz) ---
       if (jsonData.containsKey('Pitch') && jsonData['Pitch'] != null) {
@@ -551,6 +585,7 @@ class BluetoothService with ChangeNotifier {
       if (jsonData['Ea'] is num) _ea = (jsonData['Ea'] as num).toInt();
       if (jsonData['Sg'] is num) _sg = (jsonData['Sg'] as num).toInt();
       if (jsonData['Hz'] is num) _hz = (jsonData['Hz'] as num).toInt();
+      if (jsonData['Rz'] is num) _rz = (jsonData['Rz'] as num).toDouble();
 
       if (jsonData.containsKey('Pos') && jsonData['Pos'] != null) {
         _posInt = (jsonData['Pos'] as num).toInt();
@@ -749,7 +784,8 @@ class BluetoothService with ChangeNotifier {
 
   /// Se llama con cada paquete de telemetría: arma la lista de muestras mientras el robot corre
   void _registrarCorrida(Map<String, dynamic> j) {
-    final corriendo = _est == 1;
+    // La prueba a fondo (Md 4) no sigue la línea: no se le pasa al asesor
+    final corriendo = _est == 1 && _md != 4;
     if (corriendo && !_registrando) {
       _registrando = true;
       _muestrasCorrida.clear();
@@ -783,6 +819,26 @@ class BluetoothService with ChangeNotifier {
       if (historialInformes.length > 8) historialInformes.removeLast();
     }
     _muestrasCorrida.clear();
+  }
+
+  /// Resumen de la corrida que acaba de terminar (lo mide el robot en cada ciclo del lazo)
+  void _handleResumen(Map<String, dynamic> j) {
+    double d(String k) => (j[k] is num) ? (j[k] as num).toDouble() : 0.0;
+    int i(String k) => (j[k] is num) ? (j[k] as num).toInt() : 0;
+    ultimoResumen = ResumenCorrida(DateTime.now(), i('Run'), i('Mo'), i('Nc'), i('Hzm'), d('Vo'), d('Vi'), d('Vd'),
+        d('Rc'), d('Ap'), d('Ai'), d('Ad'), d('Ed'));
+    resumenId++;
+  }
+
+  /// Prueba a fondo: las dos ruedas a 255 SIN PID durante [ms] milisegundos y el robot para solo.
+  /// No sigue la línea: es para medir la velocidad máxima real del hardware.
+  Future<void> pruebaAFondo(int ms) async {
+    await sendCommand("test:$ms");
+  }
+
+  /// Pide al robot que vuelva a mandar el resumen de la última corrida.
+  Future<void> pedirResumen() async {
+    await sendCommand("resumen");
   }
 
   /// Lista de mapas guardados: llega de a 4, en orden: {"LibI":0,"LibN":3,"Lib":[[lugar,"nombre",tramos],...]}
