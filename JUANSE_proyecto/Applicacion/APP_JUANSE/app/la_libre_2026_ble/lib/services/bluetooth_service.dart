@@ -65,6 +65,21 @@ class ResumenCorrida {
   double get velMedia => (vi + vd) / 2;
 }
 
+/// Error de la última corrida, medido por el ROBOT en cada ciclo del lazo (no son las muestras de 20 Hz).
+/// Llega una vez al parar: {"Emx":max,"Emn":min,"Smx":suma max,"Smn":suma min,"Dv":divisor}
+class ErroresCorrida {
+  final DateTime hora;
+  final int emx; // error más alto (ya dividido, como lo usa el PID)
+  final int emn; // error más bajo
+  final int smx; // suma ponderada más alta, SIN dividir
+  final int smn; // suma ponderada más baja, SIN dividir
+  final double dv; // divisor con el que arrancó la corrida
+  ErroresCorrida(this.hora, this.emx, this.emn, this.smx, this.smn, this.dv);
+
+  int get errorMaxAbs => emx.abs() > emn.abs() ? emx.abs() : emn.abs();
+  int get sumaMaxAbs => smx.abs() > smn.abs() ? smx.abs() : smn.abs();
+}
+
 /// Una tabla de sectores guardada con nombre en el robot.
 class SectoresGuardadoInfo {
   final int lugar; // posición dentro de la biblioteca de sectores del robot
@@ -153,6 +168,17 @@ class BluetoothService with ChangeNotifier {
   // Resumen de la última corrida, medido por el robot (llega al pararlo)
   ResumenCorrida? ultimoResumen;
   int resumenId = 0;
+
+  // --- Error: divisor, suma sin dividir, máximo/mínimo ---
+  double divisorError = 48; // error = suma / divisor (48 = el código original). Lo informa el robot ("DIV")
+  int _su = 0; // última suma ponderada SIN dividir ("Su")
+  bool _haySu = false; // el firmware manda "Su" (las versiones viejas no)
+  int get sumaError => _su;
+  bool get haySumaError => _haySu;
+  ErroresCorrida? ultimoErrores; // máximo/mínimo de la última corrida (lo mide el robot en cada ciclo)
+  // Máximo/mínimo "en vivo": con lo que llega por la telemetría (20 por segundo) desde que se tocó Reiniciar.
+  // Sirve para medir a mano con el robot quieto (pasando la línea por debajo de los sensores).
+  int? errVivoMax, errVivoMin, sumVivoMax, sumVivoMin;
 
   // Perfiles de PID del modo con mapa y parámetros del mapa
   // (los manda el robot en "refresh" y tras cada cambio)
@@ -476,6 +502,8 @@ class BluetoothService with ChangeNotifier {
     _sg = -1;
     _hz = 0;
     _rz = 0;
+    _su = 0;
+    _haySu = false;
     biblioteca.clear();
     bibSectores.clear();
   }
@@ -551,7 +579,11 @@ class BluetoothService with ChangeNotifier {
         notifyListeners();
         return;
       }
-      if (jsonData.containsKey('RKP') || jsonData.containsKey('ADEL') || jsonData.containsKey('MKP')) {
+      // (UMB: el paquete de ajustes {"UMB","TCF","REP","DIV"} antes caía en la telemetría y no se leía)
+      if (jsonData.containsKey('RKP') ||
+          jsonData.containsKey('ADEL') ||
+          jsonData.containsKey('MKP') ||
+          jsonData.containsKey('UMB')) {
         _handleExtraConfig(jsonData);
         notifyListeners();
         return;
@@ -563,6 +595,11 @@ class BluetoothService with ChangeNotifier {
       }
       if (jsonData.containsKey('Run')) {
         _handleResumen(jsonData);
+        notifyListeners();
+        return;
+      }
+      if (jsonData.containsKey('Emx')) {
+        _handleErrores(jsonData);
         notifyListeners();
         return;
       }
@@ -593,6 +630,21 @@ class BluetoothService with ChangeNotifier {
       } else if (jsonData.containsKey('pos') && jsonData['pos'] != null) {
         _posInt = (jsonData['pos'] as num).toInt();
         _pos = _posInt.toString();
+      }
+      if (jsonData['Su'] is num) {
+        _su = (jsonData['Su'] as num).toInt();
+        _haySu = true;
+      }
+      // Máximo/mínimo en vivo (solo con la telemetría de cada 50 ms, que trae "Tr")
+      if (jsonData.containsKey('Tr')) {
+        if (jsonData['Pos'] is num) {
+          if (errVivoMax == null || _posInt > errVivoMax!) errVivoMax = _posInt;
+          if (errVivoMin == null || _posInt < errVivoMin!) errVivoMin = _posInt;
+        }
+        if (jsonData['Su'] is num) {
+          if (sumVivoMax == null || _su > sumVivoMax!) sumVivoMax = _su;
+          if (sumVivoMin == null || _su < sumVivoMin!) sumVivoMin = _su;
+        }
       }
 
       if (jsonData.containsKey('Bat') && jsonData['Bat'] != null) {
@@ -727,6 +779,13 @@ class BluetoothService with ChangeNotifier {
     repetir = i('REP', repetir ? 1 : 0) != 0;
     umb = i('UMB', umb);
     tcf = i('TCF', tcf);
+    final nuevoDiv = d('DIV', divisorError);
+    if (nuevoDiv != divisorError) {
+      divisorError = nuevoDiv;
+      // el error en vivo medido con otro divisor ya no sirve (la suma sin dividir sí)
+      errVivoMax = null;
+      errVivoMin = null;
+    }
     usarMapa = i('MAPA', usarMapa ? 1 : 0) != 0;
     pasadas = i('PAS', pasadas);
 
@@ -828,6 +887,39 @@ class BluetoothService with ChangeNotifier {
     ultimoResumen = ResumenCorrida(DateTime.now(), i('Run'), i('Mo'), i('Nc'), i('Hzm'), d('Vo'), d('Vi'), d('Vd'),
         d('Rc'), d('Ap'), d('Ai'), d('Ad'), d('Ed'));
     resumenId++;
+  }
+
+  /// Error más alto y más bajo de la corrida que acaba de terminar (lo mide el robot en cada ciclo del lazo)
+  void _handleErrores(Map<String, dynamic> j) {
+    int i(String k) => (j[k] is num) ? (j[k] as num).toInt() : 0;
+    final dv = (j['Dv'] is num) ? (j['Dv'] as num).toDouble() : divisorError;
+    ultimoErrores = ErroresCorrida(DateTime.now(), i('Emx'), i('Emn'), i('Smx'), i('Smn'), dv);
+  }
+
+  /// Cambia el divisor del error en el robot (error = suma / divisor). Se manda el texto TAL CUAL lo tipeaste
+  /// (con coma o punto). Devuelve false si no es un número válido o es 0 (no se puede dividir por 0).
+  /// Queda en el robot hasta que lo apagues; para que quede para siempre, tocá Guardar.
+  Future<bool> setDivisorError(String texto) async {
+    final t = texto.trim().replaceAll(',', '.');
+    final v = double.tryParse(t);
+    if (v == null || !v.isFinite || v == 0) return false;
+    if (v != divisorError) {
+      errVivoMax = null;
+      errVivoMin = null;
+    }
+    divisorError = v;
+    notifyListeners();
+    await sendCommand("div:$t");
+    return true;
+  }
+
+  /// Vuelve a empezar el máximo/mínimo "en vivo" del error y de la suma sin dividir.
+  void reiniciarErrorVivo() {
+    errVivoMax = null;
+    errVivoMin = null;
+    sumVivoMax = null;
+    sumVivoMin = null;
+    notifyListeners();
   }
 
   /// Prueba a fondo: las dos ruedas a 255 SIN PID durante [ms] milisegundos y el robot para solo.
