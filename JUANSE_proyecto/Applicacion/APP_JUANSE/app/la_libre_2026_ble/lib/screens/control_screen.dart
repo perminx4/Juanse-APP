@@ -1088,6 +1088,38 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
+  // Qué hace el robot cuando el PID pide más de 255 (o menos de 0) en una rueda ("dif:1|0")
+  Widget _switchDiferencia(BluetoothService service) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Mantener la diferencia del PID',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
+                ),
+                Text(
+                  service.mantenerDiferencia
+                      ? 'Si una rueda se pasa de 255, baja las dos: pide 300 y 200 → 255 y 155 (gira lo que pide el PID).'
+                      : 'Recorte original: pide 300 y 200 → 255 y 200 (se pierde parte de la corrección).',
+                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: service.mantenerDiferencia,
+            onChanged: service.isConnected ? (v) => service.setMantenerDiferencia(v) : null,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildParameterControls(BluetoothService service) {
     final settings = Provider.of<SettingsService>(context);
     final Color themeColor = service.isLowBattery ? Colors.redAccent : Colors.blueAccent;
@@ -1125,6 +1157,7 @@ class _ControlScreenState extends State<ControlScreen> {
             ),
             const Divider(height: 12),
             _avisoVelocidad(service),
+            _switchDiferencia(service),
             ..._controlValues.entries.map((entry) {
               final key = entry.key;
               final step = key == 'fcur' ? 0.05 : (key == 'ki' ? 0.001 : (settings.steps[key] ?? 1.0));
