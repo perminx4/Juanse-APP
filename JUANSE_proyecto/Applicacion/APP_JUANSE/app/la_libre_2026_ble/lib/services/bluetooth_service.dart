@@ -171,6 +171,9 @@ class BluetoothService with ChangeNotifier {
 
   // --- Error: divisor, suma sin dividir, máximo/mínimo ---
   double divisorError = 48; // error = suma / divisor (48 = el código original). Lo informa el robot ("DIV")
+  // Si una rueda se pasa de 255 (o baja de 0): true = corre las dos y mantiene la diferencia del PID ("dif:1"),
+  // false = recorte original rueda por rueda ("dif:0"). Lo informa el robot ("DIF").
+  bool mantenerDiferencia = true;
   int _su = 0; // última suma ponderada SIN dividir ("Su")
   bool _haySu = false; // el firmware manda "Su" (las versiones viejas no)
   int get sumaError => _su;
@@ -786,6 +789,7 @@ class BluetoothService with ChangeNotifier {
       errVivoMax = null;
       errVivoMin = null;
     }
+    mantenerDiferencia = i('DIF', mantenerDiferencia ? 1 : 0) != 0;
     usarMapa = i('MAPA', usarMapa ? 1 : 0) != 0;
     pasadas = i('PAS', pasadas);
 
@@ -911,6 +915,14 @@ class BluetoothService with ChangeNotifier {
     notifyListeners();
     await sendCommand("div:$t");
     return true;
+  }
+
+  /// Mantener la diferencia del PID cuando una rueda se pasa de 0-255 (true) o recorte original (false).
+  /// Queda en el robot hasta que lo apagues; para que quede para siempre, tocá Guardar.
+  Future<void> setMantenerDiferencia(bool v) async {
+    mantenerDiferencia = v;
+    notifyListeners();
+    await sendCommand(v ? "dif:1" : "dif:0");
   }
 
   /// Vuelve a empezar el máximo/mínimo "en vivo" del error y de la suma sin dividir.
