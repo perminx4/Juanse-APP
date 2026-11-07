@@ -8,6 +8,7 @@ import '../services/bluetooth_service.dart';
 import '../services/settings_service.dart';
 import 'settings_screen.dart';
 import 'resumen_corrida_card.dart';
+import 'error_card.dart';
 
 class ControlScreen extends StatefulWidget {
   const ControlScreen({super.key});
@@ -529,6 +530,8 @@ class _ControlScreenState extends State<ControlScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildActionButtons(service),
+        const SizedBox(height: 12),
+        ErrorCard(s: service),
         const SizedBox(height: 12),
         _buildParameterControls(service),
         const SizedBox(height: 12),
