@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/bluetooth_service.dart';
 import '../services/settings_service.dart';
 import 'settings_screen.dart';
+import 'resumen_corrida_card.dart';
 
 class ControlScreen extends StatefulWidget {
   const ControlScreen({super.key});
@@ -531,6 +532,8 @@ class _ControlScreenState extends State<ControlScreen> {
         const SizedBox(height: 12),
         _buildParameterControls(service),
         const SizedBox(height: 12),
+        ResumenCorridaCard(s: service),
+        const SizedBox(height: 12),
         _buildProfileManagement(),
 
         const SizedBox(height: 20),
@@ -969,13 +972,39 @@ class _ControlScreenState extends State<ControlScreen> {
                 _dataDisplayItem("Pista", service.lineaBlanca == "1" ? "Blanca (B)" : "Negra (N)"),
                 _dataDisplayItem("Largada", service.modoLargada == 2 ? "Sectores" : "Normal"),
                 _dataDisplayItem("Sectores", service.sectores.length.toString()),
-                _dataDisplayItem("Lazo", service.lazoHz > 0 ? "${service.lazoHz} Hz" : "—"),
+                // Corriendo: medido. Quieto: estimado con lo que tarda leer los 12 sensores (≈)
+                _dataDisplayItem(
+                    "Lazo",
+                    service.lazoHz > 0
+                        ? (service.estadoVal == 1 ? "${service.lazoHz} Hz" : "≈${service.lazoHz} Hz")
+                        : "—"),
               ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _dataDisplayItem("Ruido (quieto)", service.ruidoReposo > 0 ? service.ruidoReposo.toStringAsFixed(1) : "—"),
+                _dataDisplayItem("Kd × ruido", _kdPorRuido(service)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Ruido = cuánto cambia el error entre dos lecturas con el robot QUIETO sobre la línea. '
+              'Kd × ruido ≈ cuánto mueve las ruedas el término D solo por ruido; con VM en 255 eso le saca '
+              'más o menos la mitad de ese valor a la velocidad media.',
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
         ),
       ),
     );
+  }
+
+  String _kdPorRuido(BluetoothService service) {
+    final kd = double.tryParse(service.kd);
+    final rz = service.ruidoReposo;
+    if (kd == null || rz <= 0) return "—";
+    return (kd * rz).abs().toStringAsFixed(1);
   }
 
   Widget _dataDisplayItem(String label, String value) {
@@ -1023,10 +1052,13 @@ class _ControlScreenState extends State<ControlScreen> {
     final double vm = double.tryParse(service.ve) ?? 0;
     final int menor = l < r ? l : r;
     final int mayor = l < r ? r : l;
+    // Con VM de 225 para arriba la otra rueda no puede pasar de 255 (antes se pedía "VM + 30" y con
+    // VM = 255 este aviso nunca aparecía, justo cuando más velocidad saca el PID).
+    final double topeAviso = vm + 30 < 255 ? vm + 30 : 255.0;
     final bool pidDomina = service.estadoVal == 1 &&
         (service.modoCorrida == 0 || service.modoCorrida == 3) &&
         menor == 0 &&
-        mayor > vm + 30;
+        mayor >= topeAviso;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1039,8 +1071,12 @@ class _ControlScreenState extends State<ControlScreen> {
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
-              '⚠️ El PID está mandando una rueda a 0 y la otra a $mayor (VM es ${vm.round()}). La corrección '
-              '(Kp × error + Kd × cambio) es mayor que VM: por eso cambiar VM casi no se nota. Bajá Kp/Kd o subí VM.',
+              vm >= 225
+                  ? '⚠️ El PID está mandando una rueda a 0 y la otra a $mayor (VM es ${vm.round()}). La corrección '
+                      '(Kp × error + Kd × cambio) es igual o mayor que VM: con VM alto el PID solo puede frenar '
+                      'una rueda, así que eso le saca velocidad al robot. Si pasa en las rectas, bajá Kp o Kd.'
+                  : '⚠️ El PID está mandando una rueda a 0 y la otra a $mayor (VM es ${vm.round()}). La corrección '
+                      '(Kp × error + Kd × cambio) es mayor que VM: por eso cambiar VM casi no se nota. Bajá Kp/Kd o subí VM.',
               style: const TextStyle(fontSize: 12, color: Colors.orangeAccent),
             ),
           ),
