@@ -54,6 +54,10 @@ class _SectoresScreenState extends State<SectoresScreen> {
   final Map<String, double> _local = {};
   final Map<String, Timer> _timersEnvio = {};
   final Map<String, Timer> _timersLimpieza = {};
+  // Comandos que están esperando los 0,4 s para salir. Si cambiás de pestaña antes, se mandan igual
+  // (antes el cambio se veía en pantalla pero nunca llegaba al robot).
+  final Map<String, String> _pendientes = {};
+  BluetoothService? _servicio;
   int _ultimoAvisoId = 0;
 
   @override
@@ -70,6 +74,17 @@ class _SectoresScreenState extends State<SectoresScreen> {
     for (final t in _timersLimpieza.values) {
       t.cancel();
     }
+    final servicio = _servicio;
+    if (servicio != null && _pendientes.isNotEmpty) {
+      final lista = List<String>.of(_pendientes.values);
+      // Se mandan después de que termine de cerrarse la pantalla (no durante el dispose)
+      Future.microtask(() async {
+        for (final c in lista) {
+          await servicio.sendCommand(c);
+        }
+      });
+    }
+    _pendientes.clear();
     super.dispose();
   }
 
@@ -134,8 +149,12 @@ class _SectoresScreenState extends State<SectoresScreen> {
 
     _timersEnvio[p.cmd]?.cancel();
     _timersLimpieza[p.cmd]?.cancel();
+    final comando = '${p.cmd}:${_formato(p, v)}';
+    _pendientes[p.cmd] = comando;
+    _servicio = s;
     _timersEnvio[p.cmd] = Timer(const Duration(milliseconds: 400), () {
-      s.sendCommand('${p.cmd}:${_formato(p, v)}');
+      _pendientes.remove(p.cmd);
+      s.sendCommand(comando);
       // Después de que el robot confirme, se vuelve a mostrar el valor del robot
       _timersLimpieza[p.cmd] = Timer(const Duration(milliseconds: 1500), () {
         if (mounted) setState(() => _local.remove(p.cmd));
@@ -541,7 +560,7 @@ class _SectoresScreenState extends State<SectoresScreen> {
   Widget _bloquePid(BluetoothService s, int tipo, List<_Par> pars, bool conectado) {
     final vm = _local['vm'] ?? _valorRobot(s, 'vm');
     final factor = _local[pars.last.cmd] ?? _valorRobot(s, pars.last.cmd);
-    final pwm = (vm * factor).round();
+    final pwm = (vm * factor).round().clamp(0, 255).toInt(); // el robot no pasa de 255 (límite del PWM)
     final color = _coloresTipo[tipo];
     return Container(
       margin: const EdgeInsets.only(top: 10),
